@@ -30,6 +30,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 from .wechat_wcdb_diagnostic import maybe_launch_wcdb_diagnostic
+from ..identity_names import identity_search_names
+from ..rich_message import SenderIdentity
 
 
 DEFAULT_TIMEOUT_SECONDS = 180
@@ -176,6 +178,7 @@ class WeChatSession:
     message_available: bool = True
     unavailable_reason: str | None = None
     last_timestamp: int | float | str | None = None
+    search_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -383,7 +386,7 @@ class WeChatDatabaseProvider:
             and _is_conversation_username(row["username"])
         }
         message_counts = self._session_message_counts(inventory, requested_tables)
-        contact_names = self._contact_display_names()
+        contact_names = self._contact_identities()
 
         sessions: list[WeChatSession] = []
         for row in rows:
@@ -395,10 +398,12 @@ class WeChatDatabaseProvider:
             if not _is_conversation_username(username):
                 continue
             message_available = message_table_name(username) in available_tables
+            identity = contact_names.get(username)
             sessions.append(
                 WeChatSession(
                     session_id=username,
-                    display_name=contact_names.get(username) or username,
+                    display_name=identity.display_name if identity else username,
+                    search_names=identity_search_names(identity.remark, identity.nickname) if identity else (),
                     session_type=_session_type(username),
                     message_count=message_counts.get(message_table_name(username)),
                     last_timestamp=row.get("last_timestamp"),
@@ -464,17 +469,18 @@ class WeChatDatabaseProvider:
         )
         destination = Path(output_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        contact_names = self._contact_display_names()
+        contact_names = self._contact_identities()
         resolved_rows: list[Any] = []
         for row in rows:
             if isinstance(row, Mapping):
                 merged = dict(row)
                 sender_id = row.get("user_name")
                 if isinstance(sender_id, str) and sender_id.strip():
-                    merged["sender_name"] = (
-                        contact_names.get(sender_id.strip())
-                        or sender_id.strip()
-                    )
+                    identity = contact_names.get(sender_id.strip())
+                    merged["sender_name"] = identity.display_name if identity else sender_id.strip()
+                    if identity:
+                        merged["sender_remark"] = identity.remark
+                        merged["sender_nickname"] = identity.nickname
                 resolved_rows.append(merged)
             else:
                 resolved_rows.append(row)
@@ -484,7 +490,7 @@ class WeChatDatabaseProvider:
                 "username": session_id,
                 "session_type": _session_type(session_id),
                 "display_name": (
-                    contact_names.get(session_id) or session_id
+                    contact_names[session_id].display_name if session_id in contact_names else session_id
                 ),
             },
             "messages": resolved_rows,
@@ -918,10 +924,10 @@ class WeChatDatabaseProvider:
                     totals[table] = totals.get(table, 0) + count
         return {table: count for table, count in totals.items() if table not in unknown}
 
-    def _contact_display_names(self) -> dict[str, str]:
-        """Return username -> resolved display name from contact.db."""
+    def _contact_identities(self) -> dict[str, SenderIdentity]:
+        """Keep both supplied contact names, keyed by the source username."""
         root = self._resolve_data_root()
-        names: dict[str, str] = {}
+        names: dict[str, SenderIdentity] = {}
         for directory in _iter_db_directories(root):
             contact_db = directory / CONTACT_DB_NAME
             if not contact_db.is_file():
@@ -949,7 +955,11 @@ class WeChatDatabaseProvider:
                     row.get("nick_name"),
                 )
                 if display_name:
-                    names[username] = display_name
+                    names[username] = SenderIdentity(
+                        username, display_name,
+                        remark=_first_display_name(row.get("remark")),
+                        nickname=_first_display_name(row.get("nick_name")),
+                    )
         return names
 
 

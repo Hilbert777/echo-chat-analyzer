@@ -13,6 +13,11 @@ def first_identity_name(*values: str | None) -> str | None:
     return None
 
 
+def identity_search_names(*values: str | None) -> tuple[str, ...]:
+    """Retain every supplied human name without using names as identity keys."""
+    return tuple(dict.fromkeys(name for value in values if (name := first_identity_name(value))))
+
+
 def resolve_member_names(
     *,
     remark: str | None,

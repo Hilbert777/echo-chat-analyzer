@@ -169,6 +169,7 @@ DOMAIN_MODULES = {
         "test_qq_direct_db_snapshot_runtime",
         "test_qq_direct_identity_names",
         "test_qq_direct_main_wal_acquisition",
+        "test_qq_direct_capture_protocol",
         "test_qq_direct_main_wal_poc",
         "test_qq_direct_scope_acquisition",
         "test_qq_direct_self_identity",

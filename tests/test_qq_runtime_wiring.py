@@ -40,6 +40,8 @@ def release(tmp_path, monkeypatch):
         'plugins/napcat-plugin-echo/bridge.mjs': (ROOT / 'scripts/qq_napcat_plugin/bridge.mjs').read_bytes(),
         'plugins/napcat-plugin-echo/snapshot/snapshot.mjs': (ROOT / 'scripts/qq_direct_db_snapshot/snapshot.mjs').read_bytes(),
         'plugins/napcat-plugin-echo/snapshot/main_wal.mjs': (ROOT / 'scripts/qq_direct_db_snapshot/main_wal.mjs').read_bytes(),
+        'plugins/napcat-plugin-echo/snapshot/source_guard.mjs': (ROOT / 'scripts/qq_direct_db_snapshot/source_guard.mjs').read_bytes(),
+        'plugins/napcat-plugin-echo/snapshot/source_guard.ps1': (ROOT / 'scripts/qq_direct_db_snapshot/source_guard.ps1').read_bytes(),
         'plugins/napcat-plugin-echo/snapshot/workspace.mjs': (ROOT / 'scripts/qq_direct_db_snapshot/workspace.mjs').read_bytes(),
     }
     assets = {**templates, 'config/plugins.json': b'{"napcat-plugin-echo":true}\n',

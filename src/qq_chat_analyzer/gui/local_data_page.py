@@ -267,7 +267,7 @@ class LocalDataPage(QWidget):
         for record in self._reports:
             values = _history_values(record)
             kind = _KIND_DISPLAY.get(getattr(record, "conversation_kind", "unknown"), "未知类型")
-            fields = (values[0], values[1], values[2], values[4], kind)
+            fields = (values[0], values[1], values[2], values[4], kind, *record.search_names)
             if not query or any(query in field.casefold() for field in fields):
                 records.append(record)
         self._render_history(records)

@@ -296,11 +296,7 @@ def _parse_record(
     sender_data = record.get("sender")
     if not isinstance(sender_data, Mapping):
         sender_data = {}
-    remark = (
-        first_identity_name(sender_data.get("remark"))
-        if conversation_type == "private"
-        else None
-    )
+    remark = first_identity_name(sender_data.get("remark"))
     nickname = first_identity_name(sender_data.get("nickname"), sender_data.get("name"))
     contextual_name = first_identity_name(sender_data.get("groupCard"))
     is_self = _resolve_is_self(fields.get("40033"), self_uin)

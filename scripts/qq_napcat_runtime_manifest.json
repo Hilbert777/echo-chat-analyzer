@@ -37,6 +37,8 @@
     "plugins/napcat-plugin-echo/package.json",
     "plugins/napcat-plugin-echo/snapshot/main_wal.mjs",
     "plugins/napcat-plugin-echo/snapshot/snapshot.mjs",
+    "plugins/napcat-plugin-echo/snapshot/source_guard.mjs",
+    "plugins/napcat-plugin-echo/snapshot/source_guard.ps1",
     "plugins/napcat-plugin-echo/snapshot/workspace.mjs",
     "qqnt.json",
     "worker/conoutSocketWorker.mjs"

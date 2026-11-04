@@ -9,6 +9,7 @@ from pathlib import Path
 import sqlite3
 import struct
 import subprocess
+import sys
 
 import pytest
 
@@ -45,6 +46,7 @@ def _interleave(source, action: str, *, mode="snapshot", phase="boundary_selecte
     # the selected read phase, without sleeps or accessing any real QQ data.
     program = """
 import * as fs from 'node:fs';
+import {spawnSync} from 'node:child_process';
 import {createCipheriv, createDecipheriv, pbkdf2Sync} from 'node:crypto';
 import { createSnapshot, createMergedEncryptedDatabase } from './scripts/qq_direct_db_snapshot/main_wal_poc.mjs';
 const [mainPath, walPath, outputPath, phase, mode] = process.argv.slice(1);
@@ -59,7 +61,13 @@ function checksum(b, little, pair=[0,0]) {
 function updateIndex(b) {
   const sum=checksum(b.subarray(0,40),true);
   b.writeUInt32LE(sum[0],40); b.writeUInt32LE(sum[1],44);
-  b.copy(b,48,0,48); fs.writeFileSync(mainPath+'-shm',b);
+  b.copy(b,48,0,48);
+  // SQLite publishes the wal-index through a mapping, including while byte
+  // locks are held. A whole-file WriteFile incorrectly conflicts with those.
+  const updated=spawnSync(process.env.ECHO_TEST_PYTHON,['-c',
+    'import sys,mmap,base64;f=open(sys.argv[1],"r+b");m=mmap.mmap(f.fileno(),0);b=base64.b64decode(sys.argv[2]);m[:len(b)]=b;m.close();f.close()',
+    mainPath+'-shm',b.toString('base64')],{encoding:'utf8'});
+  if(updated.status!==0) throw new Error('fictional wal-index publish');
 }
 function appendFrame(committed, publish=true) {
   const wal=fs.readFileSync(walPath);
@@ -96,7 +104,7 @@ const onPhase = (current) => {
 };
 try {
   const fn = mode === 'merge' ? createMergedEncryptedDatabase : createSnapshot;
-  const result = fn({mainPath, walPath, outputPath, passphrase: process.env.ECHO_POC_PASSPHRASE, onPhase});
+  const result = await fn({mainPath, walPath, outputPath, passphrase: process.env.ECHO_POC_PASSPHRASE, onPhase});
   console.log(JSON.stringify({ok:true, fired, ...result}));
 } catch (error) { console.log(JSON.stringify({ok:false, fired, code:error.code ?? 'interrupted'})); }
 """.replace("ACTION", action)
@@ -106,7 +114,7 @@ try {
         ["node", "--input-type=module", "-e", program, str(main), str(wal),
          str(output), phase, mode], cwd=SCRIPT.parents[2], capture_output=True,
         text=True, timeout=30,
-        env=dict(os.environ, ECHO_POC_PASSPHRASE=FICTIONAL_PASSPHRASE),
+        env=dict(os.environ, ECHO_POC_PASSPHRASE=FICTIONAL_PASSPHRASE, ECHO_TEST_PYTHON=sys.executable),
     )
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
@@ -149,7 +157,7 @@ def test_large_wal_is_read_in_bounded_batches_without_changing_snapshot(fictiona
   mutableFs.closeSync=fd=>{walFds.delete(fd);return originalClose(fd);};
   builtin.syncBuiltinESMExports();
 """
-        return program.replace('  const result = fn(', setup + '  const result = fn(').replace(
+        return program.replace('  const result = await fn(', setup + '  const result = await fn(').replace(
             '{ok:true, fired, ...result}', '{ok:true, fired, walReads, ...result}')
     result = _interleave(fictional_source, '', driver_transform=driver)
     assert result['ok'], result

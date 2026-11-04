@@ -52,6 +52,7 @@ class ReportPackageSummary:
     analysis_scope: AnalysisScope
     conversation_kind: str = "unknown"
     size_bytes: int | None = None
+    search_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -349,7 +350,11 @@ def _read_summary(package_name: str, path: Path) -> ReportPackageSummary:
     elif start is None or end is None or start > end:
         raise ValueError("Invalid report scope.")
     kind = data.get("conversation_kind", "unknown")
+    search_names = data.get("search_names", [])
+    if not isinstance(search_names, list) or any(not isinstance(name, str) for name in search_names):
+        raise ValueError("Invalid report search names.")
     return ReportPackageSummary(package_name, generated_at, data["source"],
                                 data["conversation_name"], data["message_count"],
                                 AnalysisScope(mode, start, end),
-                                kind if isinstance(kind, str) else "unknown")
+                                kind if isinstance(kind, str) else "unknown",
+                                search_names=tuple(search_names))

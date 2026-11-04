@@ -24,9 +24,9 @@ from test_gui import (  # noqa: F401  (fixtures are re-exported here for pytest)
     sources,
 )
 
-_LOADING_COPY = "等待 QQ 登录，请在 QQ 登录窗口完成登录。"
+_LOADING_COPY = "等待二维码出现，请不要打开 QQ。"
 _READY_COPY = "请使用手机 QQ 扫码登录"
-_SLOW_COPY = "等待 QQ 登录，你可以继续等待，或取消后重新连接。"
+_SLOW_COPY = "二维码尚未出现，你可以继续等待，或取消后重新连接。"
 
 
 def _enter_waiting_auth(facade) -> QQWorkspace:
@@ -45,6 +45,7 @@ def test_login_can_connect_and_load_sessions_without_any_qr(qt_app, sources) -> 
     workspace = _enter_waiting_auth(facade)
     assert facade.get_qq_qrcode_path() is None
     assert workspace._qq_guide_label.text() == _LOADING_COPY
+    assert "请不要打开 QQ" in workspace._qq_login_guide_label.text()
 
     facade.set_snapshot(_qq_snapshot("connected"))
     workspace._poll_qq_status()

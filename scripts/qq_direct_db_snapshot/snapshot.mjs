@@ -24,13 +24,15 @@ import { randomUUID, createHash } from 'node:crypto';
 import { unlinkSync, readFileSync } from 'node:fs';
 import { createMergedEncryptedDatabase, finalizeStandaloneSnapshot, captureCodeHash, fileState as strongFileState } from './main_wal.mjs';
 import { createWorkspace, workspaceCodeHash } from './workspace.mjs';
+import { acquireSourceGuard } from './source_guard.mjs';
 
 const snapshotCodeHash = createHash('sha256').update(readFileSync(new URL(import.meta.url))).digest('hex');
 const FAILURE_STAGES = new Set(['source_location', 'workspace_isolation', 'shm_witness',
   'wal_identity', 'wal_header', 'wal_prefix', 'wal_checksum', 'commit_boundary',
   'main_identity', 'main_stability', 'checkpoint_witness', 'cleanup', 'lease', 'input_witness',
-  'decrypt', 'plaintext_validation', 'identity_validation', 'manifest', 'publish', 'encrypted_cleanup']);
+  'decrypt', 'plaintext_validation', 'identity_validation', 'manifest', 'publish', 'encrypted_cleanup', 'source_guard']);
 const GUARD_STAGES = Object.freeze({
+  source_guard_failed: 'source_guard', capture_cancelled: 'source_guard',
   source_unavailable: 'source_location', workspace_invalid: 'workspace_isolation',
   wal_replaced: 'wal_identity', wal_header_missing: 'wal_header',
   wal_format_unsupported: 'wal_header', wal_version_unsupported: 'wal_header',
@@ -312,11 +314,11 @@ export function createEchoSnapshotApi(core, options = {}) {
   let lockTail = Promise.resolve();
   let activeGenerationId = null;
   let previousDecryptKeyVersion = null;
-  function withLock(task, releaseOnFailure = false) {
+  function withLock(task, releaseOnFailure = () => false) {
     const guarded = async () => {
       try {
         const result = await task();
-        if (!result.ok && releaseOnFailure) await workspace.release();
+        if (!result.ok && releaseOnFailure()) await workspace.release();
         return result;
       } catch (error) {
         traceAcquisitionDiagnostic('cleanup', error);
@@ -349,12 +351,12 @@ export function createEchoSnapshotApi(core, options = {}) {
 
   let databaseApiSeen = false;
 
-  async function waitForDatabaseApi() {
-    const deadline = now() + passphraseMs;
+  async function waitForDatabaseApi(signal, acquireDeadline) {
+    const deadline = Math.min(now() + passphraseMs, acquireDeadline);
     let firstPollRecorded = false;
     let nextProgressTrace = now() + 5000;
     traceStage('passphrase_wait_started');
-    while (now() < deadline) {
+    while (now() < deadline && !signal?.aborted) {
       const api = core?.apis?.DatabaseApi;
       if (api && typeof api.hasPassphrase === 'function') {
         databaseApiSeen = true;
@@ -385,9 +387,9 @@ export function createEchoSnapshotApi(core, options = {}) {
     return null;
   }
 
-  async function waitForIdentity() {
-    const deadline = now() + identityMs;
-    while (now() < deadline) {
+  async function waitForIdentity(signal, acquireDeadline) {
+    const deadline = Math.min(now() + identityMs, acquireDeadline);
+    while (now() < deadline && !signal?.aborted) {
       const value = canonicalizeUin(core?.selfInfo?.uin);
       if (value !== null) {
         return value;
@@ -407,9 +409,13 @@ export function createEchoSnapshotApi(core, options = {}) {
     }
   }
 
-  async function acquire() {
+  async function acquire({ signal, deadline = now() + 65000 } = {}) {
+    const cancelled = () => signal?.aborted || now() >= deadline;
+    let entered = false;
     traceStage('acquire_queued');
     return withLock(async () => {
+      if (cancelled()) return fail(CODES.SNAPSHOT_UNSTABLE);
+      entered = true;
       traceStage('acquire_entered');
       // 1. Fail-closed cleanup: no decryption may start unless every previous
       //    generation, staging dir and legacy plaintext artifact is gone.
@@ -422,7 +428,7 @@ export function createEchoSnapshotApi(core, options = {}) {
       activeGenerationId = null;
 
       // 2. Bounded wait for the in-process DatabaseApi and its passphrase.
-      const databaseApiResult = await waitForDatabaseApi();
+      const databaseApiResult = await waitForDatabaseApi(signal, deadline);
       if (!databaseApiResult) {
         traceStage(databaseApiSeen ? 'passphrase_not_ready' : 'database_api_not_ready');
         logDiagnostic(
@@ -434,7 +440,7 @@ export function createEchoSnapshotApi(core, options = {}) {
       traceStage('passphrase_ready');
 
       // 3. Bounded wait for a canonical self identity *before* decryption.
-      const identityBefore = await waitForIdentity();
+      const identityBefore = await waitForIdentity(signal, deadline);
       if (identityBefore === null) {
         traceStage('identity_not_ready');
         logDiagnostic('identity_not_ready');
@@ -470,27 +476,41 @@ export function createEchoSnapshotApi(core, options = {}) {
         const mainPath = join(directory, sourceDatabaseName);
         failureStage = 'workspace_isolation';
         workspace.assertSourceSeparate(mainPath);
-        failureStage = 'shm_witness';
-        const capture = createMergedEncryptedDatabase({
-          mainPath, walPath: `${mainPath}-wal`, outputPath: stagingMerged,
-          onPhase: onCapturePhase,
-          onDiagnostic: ({ failureStage: stage, ...witness }) => {
-            failureStage = stage;
-            Object.assign(captureWitness, witness);
-            traceAcquisitionDiagnostic(stage, null, generationId, witness, false);
-          },
-        });
+        failureStage = 'source_guard';
+        const sourceGuard = await acquireSourceGuard(mainPath, `${mainPath}-wal`, { signal, deadline });
+        let capture;
+        try {
+          capture = await createMergedEncryptedDatabase({
+            mainPath, walPath: `${mainPath}-wal`, outputPath: stagingMerged,
+            signal, deadline, readWitness: () => sourceGuard.readWitness(),
+            onPhase: onCapturePhase,
+            onDiagnostic: ({ failureStage: stage, ...witness }) => {
+              failureStage = stage;
+              Object.assign(captureWitness, witness);
+              traceAcquisitionDiagnostic(stage, null, generationId, witness, false);
+            },
+          });
+        } finally {
+          // No merge may reach decryption without proof that our source locks
+          // and helper handles were released. This also covers cancellation.
+          await sourceGuard.release();
+        }
         capturedPages = capture.pages;
         traceStage('main_wal_boundary_verified', generationId);
         traceStage('main_wal_capture_complete', generationId);
       } catch (error) {
         traceAcquisitionDiagnostic(failureStage, error, generationId, captureWitness);
+        try { workspace.assertLease(); }
+        catch (leaseError) { traceAcquisitionDiagnostic('lease', leaseError, generationId); return fail(CODES.CLEANUP_FAILED); }
         const cleaned = discardStaging();
         traceStage('snapshot_unstable', generationId);
         return fail(cleaned ? CODES.SNAPSHOT_UNSTABLE : CODES.CLEANUP_FAILED);
       }
 
       let decrypted = false;
+      try { workspace.assertLease(); }
+      catch (error) { traceAcquisitionDiagnostic('lease', error, generationId); return fail(CODES.CLEANUP_FAILED); }
+      if (cancelled()) return fail(discardStaging() ? CODES.SNAPSHOT_UNSTABLE : CODES.CLEANUP_FAILED);
       let decryptThrew = false;
       const sourceStateBefore = sourceDatabaseState(databaseApi);
       traceSourceDatabaseState('decrypt_source_before', sourceStateBefore, null, generationId);
@@ -526,6 +546,9 @@ export function createEchoSnapshotApi(core, options = {}) {
       traceStage('decrypt_finished');
       try { workspace.assertLease(); }
       catch (error) { traceAcquisitionDiagnostic('lease', error, generationId); return fail(CODES.CLEANUP_FAILED); }
+      // Native decryption has no safe interrupt primitive. Await it, then
+      // discard its owned output rather than publishing an abandoned result.
+      if (cancelled()) return fail(discardStaging() ? CODES.SNAPSHOT_UNSTABLE : CODES.CLEANUP_FAILED);
       traceInputWitness(inputBefore, inputAfter, generationId);
       traceSourceDatabaseState(
         'decrypt_source_after',
@@ -626,7 +649,7 @@ export function createEchoSnapshotApi(core, options = {}) {
       activeGenerationId = generationId;
 
       return { ok: true, generation_id: generationId, status: 'ready' };
-    }, true);
+    }, () => entered);
   }
 
   async function cleanup(generationId) {

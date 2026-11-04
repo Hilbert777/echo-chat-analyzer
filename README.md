@@ -4,9 +4,9 @@
 
 Echo 是一款支持 **QQ / 微信** 的 Windows 本地聊天分析工具。连接聊天来源，选择一段会话，把聊天节奏、表达习惯和常用表情包整理成可以慢慢回看的 **Echo Report**。
 
-**[下载 Windows x64 安装版](https://cnb.cool/echo_mly/echo_releases/-/releases/download/v0.3.0/Echo-0.3.0-windows-x64-Setup.exe)** · [查看版本说明](https://cnb.cool/echo_mly/echo_releases/-/releases/tag/v0.3.0) · [反馈问题](https://github.com/lindreams/echo-chat-analyzer/issues/new/choose)
+**[下载 Windows x64 安装版](https://cnb.cool/echo_mly/echo_releases/-/releases/download/v0.3.1/Echo-0.3.1-windows-x64-Setup.exe)** · [GitHub 备用下载](https://github.com/lindreams/echo-chat-analyzer/releases/download/v0.3.1/Echo-0.3.1-windows-x64-Setup.exe) · [查看版本说明](https://cnb.cool/echo_mly/echo_releases/-/releases/tag/v0.3.1) · [反馈问题](https://github.com/lindreams/echo-chat-analyzer/issues/new/choose)
 
-当前版本为 **v0.3.0**。无需安装 Python。
+当前版本为 **v0.3.1**。无需安装 Python。
 
 ![Echo Report：交流的节奏](docs/screenshots/echo-report.png)
 
@@ -21,7 +21,7 @@ Echo 是一款支持 **QQ / 微信** 的 Windows 本地聊天分析工具。连�
 - **表情包里的故事**：常用与共同常用的表情包，以及有记录支撑的招牌、接力、先后采用和流行变化。
 
 部分发现需要足够记录才会展示；表情包图片无法取得时，仍保留统计和排名。
-群聊的交流节奏、语言画像和表达文化支持成员排序与昵称、备注、群名片查找。
+会话列表和报告中的成员查找同时支持备注、昵称及可用的群名片；同一个人可用任一名称找到，同名成员仍分别保留。群聊的交流节奏、语言画像和表达文化也支持成员排序。
 
 ![Echo Report：群聊表情包](docs/screenshots/stickers.png)
 
@@ -31,7 +31,7 @@ Echo 是一款支持 **QQ / 微信** 的 Windows 本地聊天分析工具。连�
 
 **连接 QQ / 微信 → 选择会话与时间范围 → 生成报告 → 阅读或分享**
 
-1. 下载并运行 `Echo-0.3.0-windows-x64-Setup.exe`，完成安装。
+1. 下载并运行 `Echo-0.3.1-windows-x64-Setup.exe`，完成安装。
 2. 在 Echo 中选择 QQ 或微信，按提示完成连接与授权。
 3. 选择会话和时间范围，生成回顾报告。
 
@@ -40,6 +40,8 @@ Echo 是一款支持 **QQ / 微信** 的 Windows 本地聊天分析工具。连�
 *使用虚构会话展示操作界面。*
 
 首次使用或很久没有在这台电脑登录时，QQ 本机历史记录可能不完整。请先在 QQ 中确认目标会话的历史消息已加载，再回到 Echo 生成报告。
+
+开始连接后，如果 Echo 提示等待二维码，请不要自行打开 QQ；等待二维码出现在 Echo 页面，再用手机 QQ 扫码。
 
 <details>
 <summary>查看 Echo 桌面首页</summary>
@@ -66,13 +68,15 @@ Echo 是一款支持 **QQ / 微信** 的 Windows 本地聊天分析工具。连�
 
 ## 版本、更新与反馈
 
-v0.3.0 收口表情包分析与报告展示：个人发现归入对应成员，同类记录可前后翻看；收紧聊天轮次、语言及表情排行中的重复信息。私聊拍一拍／戳一戳仅展示双方次数，支持已确认来源中的个性化文案，两侧次数对齐。卸载新增保留报告和普通设置、或清除 Echo 本地数据的选择。此前的词语原话查看、成员查找、素材无损去重及 QQ 素材队列优化均保留。
+v0.3.1 修复 QQ 本地数据库快照捕获的一致性保护和超时取消处理，以及预分配数据库解密后的页数误拒问题。二维码准备阶段明确提示不要自行打开 QQ；会话列表、报告成员、聊天发起者和表情包成员查找均支持备注、昵称及可用的群名片联合检索。新生成报告的历史列表也支持这些名称，旧报告需重新生成才能获得新增检索信息。
+
+v0.3.0 的表情包分析、词语原话查看、私聊拍一拍／戳一戳和卸载数据保留选项均保留，本次不修改报告统计算法。
 
 **群聊独立“回复关系”章节延期到 0.4.0，本版不包含该原型。** 旧报告需要重新生成，才能显示新版内容；表情章节的整体篇幅调整留到后续版本。
 
 不同电脑与 QQ / 微信版本的兼容性仍在收集反馈。
 
-[查看发布说明与所有下载文件](https://cnb.cool/echo_mly/echo_releases/-/releases/tag/v0.3.0) · [查看所有版本](https://cnb.cool/echo_mly/echo_releases/-/releases) · [后续开发计划](docs/ROADMAP.md)
+[查看发布说明与所有下载文件](https://cnb.cool/echo_mly/echo_releases/-/releases/tag/v0.3.1) · [GitHub 发布页](https://github.com/lindreams/echo-chat-analyzer/releases/tag/v0.3.1) · [查看所有版本](https://cnb.cool/echo_mly/echo_releases/-/releases) · [后续开发计划](docs/ROADMAP.md)
 
 <details>
 <summary>已安装用户如何更新？</summary>

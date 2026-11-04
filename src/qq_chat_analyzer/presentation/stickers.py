@@ -92,6 +92,7 @@ def build_echo_stickers(
     *,
     conversation_kind: str,
     member_names: dict[str, str] | None = None,
+    member_search_names: dict[str, tuple[str, ...]] | None = None,
     private_features: PrivateStickerFeatures | None = None,
     group_features: GroupStickerFeatures | None = None,
 ) -> EchoStickers:
@@ -178,6 +179,7 @@ def build_echo_stickers(
             exclusive_material_count=exclusive_count,
             signature=signature_view,
             unique_material_count=len(ranked),
+            search_names=(member_search_names or {}).get(side.sender_id, ()),
         ))
     shared = report.shared_ranking(tuple(side.sender_id for side in sides)) if private and all(sides) else (
         report.shared_ranking() if not private else ())

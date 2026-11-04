@@ -209,6 +209,8 @@ def parse_rich_message(raw_message: Any) -> RichMessage | None:
         sender=SenderIdentity(
             identity_id=sender_id,
             display_name=sender,
+            remark=_clean_string(raw_message.get("sender_remark")),
+            nickname=_clean_string(raw_message.get("sender_nickname")),
         ),
         is_self=is_self,
         timestamp=timestamp,

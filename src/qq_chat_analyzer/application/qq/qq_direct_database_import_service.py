@@ -22,7 +22,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Iterator, NoReturn
 
-from ...identity_names import first_identity_name
+from ...identity_names import first_identity_name, identity_search_names
+from ...rich_message import SenderIdentity
 from ...diagnostics import log_qq_session_event, qq_session_stage
 
 from ...providers.qq_database_provider import QQDatabaseProvider, QQSession
@@ -496,6 +497,15 @@ class QQDirectDatabaseImportService:
                     except QQSnapshotWorkerGenerationChanged as error:
                         self._require_reconnect()
                         raise QQReconnectRequired() from error
+                    sender_names = {
+                        **friend_names,
+                        **{
+                            uin: replace(identity, remark=friend_names[uin].remark,
+                                         nickname=identity.nickname or friend_names[uin].nickname)
+                            if uin in friend_names else identity
+                            for uin, identity in sender_names.items()
+                        },
+                    }
                 else:
                     sender_names = friend_names
                     try:
@@ -542,7 +552,7 @@ class QQDirectDatabaseImportService:
         sessions: list[QQSession],
         *,
         group_names: dict[str, str] | None = None,
-        friend_names: dict[str, str] | None = None,
+        friend_names: dict[str, SenderIdentity] | None = None,
     ) -> list[QQSession]:
         """Join DB session keys to the existing QQ metadata provider."""
         if group_names is None or friend_names is None:
@@ -551,19 +561,22 @@ class QQDirectDatabaseImportService:
         for session in sessions:
             if session.session_type == "group":
                 name = group_names.get(session.session_object)
+                search_names = identity_search_names(name)
                 fallback = "未知群聊"
             else:
-                name = (
+                identity = (
                     friend_names.get(session.peer_uin)
                     or friend_names.get(session.session_object)
                 )
+                name = identity.display_name if identity else None
+                search_names = identity_search_names(name, identity.remark, identity.nickname) if identity else ()
                 fallback = "未知联系人"
-            named.append(replace(session, display_name=first_identity_name(name) or fallback))
+            named.append(replace(session, display_name=first_identity_name(name) or fallback, search_names=search_names))
         return named
 
-    def _metadata_names(self) -> tuple[dict[str, str], dict[str, str]]:
+    def _metadata_names(self) -> tuple[dict[str, str], dict[str, SenderIdentity]]:
         group_names: dict[str, str] = {}
-        friend_names: dict[str, str] = {}
+        friend_names: dict[str, SenderIdentity] = {}
         # Names are optional. Two default 30 s RPC waits must not hold an
         # already-read session list for another minute on a slow runtime.
         deadline = time.monotonic() + DEFAULT_METADATA_TIMEOUT_SECONDS
@@ -600,7 +613,11 @@ class QQDirectDatabaseImportService:
                 with qq_session_stage(_LOGGER, "friend_names_rpc"):
                     friends = provider.list_friends(timeout=remaining)
                 friend_names = {
-                    friend.uin: friend.display_name
+                    friend.uin: SenderIdentity(
+                        friend.uin, friend.display_name,
+                        remark=first_identity_name(getattr(friend, "remark", None)),
+                        nickname=first_identity_name(getattr(friend, "nickname", None)),
+                    )
                     for friend in friends
                     if friend.uin
                     and first_identity_name(friend.display_name)
@@ -824,10 +841,10 @@ def _group_sender_names_with_diagnostics(
     client: Any,
     session: QQSession,
     payload: Any,
-) -> dict[str, str]:
+) -> dict[str, SenderIdentity]:
     """Fetch optional member names and log anonymous identity coverage."""
     get_members = getattr(client, "get_group_member_all", None)
-    sender_names: dict[str, str] = {}
+    sender_names: dict[str, SenderIdentity] = {}
     member_data = _group_member_data(None)
     rpc_status = "api_unavailable"
     if callable(get_members):
@@ -942,7 +959,7 @@ def _safe_relative_name(value: Any) -> str | None:
 def _attach_sender_names(
     payload_path: Path,
     payload: Any,
-    friend_names: dict[str, str],
+    friend_names: dict[str, SenderIdentity],
     self_uin: str | None,
 ) -> None:
     """Add known QQ names to the transient payload after DB cleanup."""
@@ -951,9 +968,12 @@ def _attach_sender_names(
         sender_uin = canonical_qq_uin(fields.get("40033"))
         if sender_uin is None or sender_uin == self_uin:
             continue
-        name = friend_names.get(sender_uin)
-        if name:
-            record["sender"] = {"displayName": name}
+        identity = friend_names.get(sender_uin)
+        if identity:
+            record["sender"] = {
+                "displayName": identity.display_name, "remark": identity.remark,
+                "nickname": identity.nickname, "groupCard": identity.contextual_name,
+            }
     payload_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
@@ -1038,7 +1058,7 @@ def _group_member_data(result: Any) -> dict[str, Any]:
                 nick_uins.add(uin)
         name = first_identity_name(card, nick)
         if uin and name:
-            names[uin] = name
+            names[uin] = SenderIdentity(uin, name, nickname=nick, contextual_name=card)
     return {
         "status": "ok",
         "names": names,

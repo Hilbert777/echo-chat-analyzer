@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from ..media_content import StoredMedia
+from ..identity_names import identity_search_names
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +41,12 @@ class EchoMemberCard:
     contextual_name: str | None = None
     weekday_average_activity: tuple[ChartPoint, ...] = ()
     first_seen_order: int | None = None
+    nickname: str | None = None
+
+    @property
+    def search_names(self) -> tuple[str, ...]:
+        return identity_search_names(self.display_name, self.primary_name, self.secondary_name,
+                                     self.remark, self.contextual_name, self.nickname)
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +195,7 @@ class EchoSessionInitiator:
     display_name: str
     count: int
     is_viewer: bool = False
+    search_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,6 +273,7 @@ class EchoStickerMember:
     exclusive_material_count: int | None = None
     signature: EchoStickerItem | None = None
     unique_material_count: int | None = None
+    search_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

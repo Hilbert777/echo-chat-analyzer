@@ -223,6 +223,18 @@
       "description": "Echo NapCat program asset."
     },
     {
+      "path": "qq-napcat-candidate/plugins/napcat-plugin-echo/snapshot/source_guard.mjs",
+      "source": "qq-napcat-candidate",
+      "type": "file",
+      "description": "Echo NapCat program asset."
+    },
+    {
+      "path": "qq-napcat-candidate/plugins/napcat-plugin-echo/snapshot/source_guard.ps1",
+      "source": "qq-napcat-candidate",
+      "type": "file",
+      "description": "Echo NapCat program asset."
+    },
+    {
       "path": "qq-napcat-candidate/plugins/napcat-plugin-echo/snapshot/workspace.mjs",
       "source": "qq-napcat-candidate",
       "type": "file",

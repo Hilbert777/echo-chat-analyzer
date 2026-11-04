@@ -261,7 +261,8 @@ def _build_echo_sessions(
                     label = f"{name}（{ordinals[name]}）"
             reserved.add(label)
             member = member_by_key.get(key)
-            openers.append(EchoSessionInitiator(label, count, bool(member and member.is_viewer)))
+            openers.append(EchoSessionInitiator(label, count, bool(member and member.is_viewer),
+                                              member.search_names if member else ()))
     top_member = (
         next(
             (
@@ -718,6 +719,7 @@ def build_echo_report_view(
         stickers=build_echo_stickers(
             reports.stickers, sticker_media, conversation_kind=conversation_kind,
             member_names={member.speaker_key: member.display_name for member in members},
+            member_search_names={member.speaker_key: member.search_names for member in members},
             private_features=reports.private_stickers,
             group_features=reports.group_stickers,
         ),
@@ -751,6 +753,7 @@ def _build_echo_member(
         secondary_name=secondary_name,
         remark=profile.remark,
         contextual_name=contextual_name,
+        nickname=profile.nickname,
         is_viewer=(
             viewer_speaker_key is not None
             and speaker_key == viewer_speaker_key

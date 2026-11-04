@@ -130,6 +130,12 @@ if(config.mode==='slow-acquire') snapshot.acquire=async()=>{
   mark('acquire'); await new Promise(resolve=>setTimeout(resolve,200));
   mark('ready'); return {ok:true,status:'ready',generation_id:'test-generation'};
 };
+if(config.mode==='cancellable-acquire') snapshot.acquire=async({signal,deadline})=>{
+  if(!Number.isFinite(deadline)) throw new Error('missing deadline');
+  mark('acquire');
+  await new Promise(resolve=>signal.aborted ? resolve() : signal.addEventListener('abort',resolve,{once:true}));
+  mark('cancelled');return {ok:false,status:'failed',code:'snapshot_unstable'};
+};
 if(config.mode==='blocked-acquire') snapshot.acquire=async()=>{
   mark('acquire'); const until=performance.now()+100;
   while(performance.now()<until) {} // A synchronous capture cannot receive socket-close events.
@@ -317,6 +323,34 @@ def test_optional_rpc_budget_includes_initial_status_handshake(monkeypatch):
     assert timeouts == [5, 2]
 
 
+@pytest.mark.parametrize('reason', ['disconnect', 'deadline'])
+def test_bridge_forwards_cancellation_to_running_capture(runtime, tmp_path, reason):
+    import time
+    marker = tmp_path/'operations.txt'
+    base = runtime('cancellable-acquire',marker=marker)
+    boot = provider(base).status().boot_id
+    parsed = urllib.parse.urlsplit(base)
+    connection = http.client.HTTPConnection(parsed.hostname,parsed.port,timeout=3)
+    connection.request('POST','/rpc',json.dumps({'method':'EchoSnapshotApi.acquire',
+        'params':[],'boot_id':boot,'timeout_ms':50 if reason=='deadline' else 65000}),
+        headers={'Authorization':f'Bearer {TOKEN}','Content-Type':'application/json'})
+    try:
+        deadline = time.monotonic()+3
+        while 'acquire' not in marker.read_text():
+            assert time.monotonic()<deadline
+            time.sleep(.01)
+        if reason=='deadline':
+            assert json.load(connection.getresponse())=={'ok':False,'error':'qq_runtime_operation_failed'}
+    finally:
+        connection.close()
+    while 'cancelled' not in marker.read_text():
+        assert time.monotonic()<deadline
+        time.sleep(.01)
+    operations = marker.read_text().splitlines()
+    assert operations.count('cancelled')==1
+    assert 'ready' not in operations and 'cleanup' not in operations
+
+
 def test_expired_acquire_budget_discards_ready_result_even_while_socket_is_open(runtime, tmp_path):
     marker = tmp_path / 'fictional-deadline.txt'
     log = tmp_path / 'snapshot-diagnostics.log'
@@ -394,15 +428,24 @@ def test_real_bridge_snapshot_to_facade_and_abandoned_cleanup(runtime, tmp_path,
             with pytest.raises(FacadeError) as caught:
                 facade.list_sessions(ChatSource.QQ)
             assert caught.value.code == 'qq_direct_snapshot_acquire_failed'
+            # Recovery is serialized behind cancellation and acknowledges that
+            # the abandoned operation has relinquished its workspace lease.
+            client.recover()
         else:
             assert {s.session_type for s in facade.list_sessions(ChatSource.QQ)} == {'group', 'private'}
         deadline = time.monotonic() + 5
-        while (not marker.exists() or 'direct-decrypted' not in marker.read_text() or
+        while ((scenario != 'abandon' and (not marker.exists() or 'direct-decrypted' not in marker.read_text())) or
                (root / 'staging').exists() or any((root / 'generations').glob('*'))):
             assert time.monotonic() < deadline
             time.sleep(0.01)
         assert run_workspace(root, 'workspace.recover();')['ok']
-        assert marker.read_text().splitlines().count('capture') == (2 if scenario == 'transient_main' else 1)
+        operations = marker.read_text().splitlines() if marker.exists() else []
+        if scenario == 'abandon':
+            # The deadline now cancels before native decryption starts.
+            assert 'direct-decrypted' not in operations
+            assert operations.count('capture') <= 1
+        else:
+            assert operations.count('capture') == (2 if scenario == 'transient_main' else 1)
     finally:
         client.recover()
 

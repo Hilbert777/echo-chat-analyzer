@@ -7,6 +7,7 @@ from datetime import datetime
 from ..analysis.revision import ANALYSIS_REVISION
 from ..presentation.echo_serializer import ECHO_REPORT_SCHEMA_VERSION
 from ..version import APP_VERSION
+from ..identity_names import identity_search_names
 from .dto import AnalysisResultDTO
 from .scope_filter import AnalysisScope, AnalysisScopeMode
 
@@ -39,6 +40,8 @@ def build_report_metadata(
         "generated_at": generated_at.isoformat(),
         "source": source,
         "conversation_name": view.conversation_name,
+        "search_names": list(identity_search_names(
+            view.conversation_name, *(name for member in view.members for name in member.search_names))),
         "conversation_kind": view.conversation_kind,
         "message_count": view.total_message_count,
         "active_days": view.active_days,

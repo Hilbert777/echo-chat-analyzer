@@ -65,9 +65,9 @@ _QQ_AUTH_TIMEOUT_HINT = "登录等待时间过长，请重新连接。"
 # Before a QR is available, cancellation is disabled for at most this bound.
 # Waiting without a QR must not trap the user or be treated as a failed login.
 _QQ_QR_RELEASE_MS = 8000
-_QQ_QR_LOADING_ACTION = "等待 QQ 登录，请在 QQ 登录窗口完成登录。"
+_QQ_QR_LOADING_ACTION = "等待二维码出现，请不要打开 QQ。"
 _QQ_QR_READY_ACTION = "请使用手机 QQ 扫码登录"
-_QQ_QR_SLOW_ACTION = "等待 QQ 登录，你可以继续等待，或取消后重新连接。"
+_QQ_QR_SLOW_ACTION = "二维码尚未出现，你可以继续等待，或取消后重新连接。"
 _QQ_QRCODE_SIZE = 240
 # The connection journey the trail walks: 准备 → 启动 QQ → 登录 → 连接.
 _QQ_STAGE_PREPARING = 0
@@ -88,8 +88,8 @@ _QQ_STAGE_COPY = {
         "这是 Echo 内置的 QQ 数据读取组件，请允许它运行。",
     ),
     _QQ_STAGE_SCANNING: (
-        "等待 QQ 登录",
-        "请在 QQ 登录窗口完成登录，Echo 会自动继续。",
+        "等待二维码出现",
+        "请不要打开 QQ，请等待二维码出现在此页面。",
     ),
     _QQ_STAGE_CONNECTING: (
         "正在准备聊天记录",
@@ -675,7 +675,7 @@ class QQWorkspace(QWidget):
         note = _QQ_STAGE_COPY[_QQ_STAGE_SCANNING][1]
         if self._qq_qrcode_label.isVisibleTo(self):
             self._stop_qq_qr_wait_timer()
-            self._show_qq_guide(_QQ_QR_READY_ACTION, note)
+            self._show_qq_guide(_QQ_QR_READY_ACTION, "请使用手机 QQ 扫描上方二维码，Echo 会自动继续。")
             self._qq_connect_button.setEnabled(True)
             return
         if self._qq_qr_wait_elapsed():

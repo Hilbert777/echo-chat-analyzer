@@ -241,6 +241,9 @@ def test_runtime_only_build_copies_complete_wechat_node_module(
     assert shipped_runner.read_text(encoding="utf-8").startswith(
         "# fictional diagnostic runner"
     )
+    for name in ("source_guard.mjs", "source_guard.ps1"):
+        relative = Path("qq-napcat-candidate/plugins/napcat-plugin-echo/snapshot") / name
+        assert (tmp_path / "dist/Echo/runtime" / relative).read_bytes() == (tmp_path / "runtime" / relative).read_bytes()
 
 
 def test_runtime_only_rejects_changed_sqlite_before_copying(tmp_path: Path) -> None:

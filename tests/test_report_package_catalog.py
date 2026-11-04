@@ -56,6 +56,25 @@ def test_lists_only_metadata_in_stable_generated_time_order(tmp_path, monkeypatc
     assert not listing.issues
 
 
+def test_search_names_roundtrip_from_view_metadata_without_reading_report_bodies(tmp_path):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from qq_chat_analyzer.application.report_package_metadata import build_report_metadata
+    from qq_chat_analyzer.application.scope_filter import AnalysisScope, AnalysisScopeMode
+    from test_language_sources import _view
+    view = _view()
+    member = dataclasses.replace(view.members[0], remark="虚构备注", contextual_name="虚构群名片", nickname="虚构昵称")
+    view = dataclasses.replace(view, members=(member,))
+    result = SimpleNamespace(echo_report_view=view, reports=SimpleNamespace(conversations=None))
+    metadata = build_report_metadata(result=result, source="qq", scope=AnalysisScope(AnalysisScopeMode.ALL),
+                                     generated_at=datetime.now(timezone.utc))
+    assert {"虚构备注", "虚构群名片", "虚构昵称"} <= set(metadata["search_names"])
+    package = _package(tmp_path)
+    (package / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    summary, = _catalog(tmp_path).list_reports().reports
+    assert set(summary.search_names) == set(metadata["search_names"])
+
+
 def test_listing_and_usage_share_observation_including_broken_and_unmeasured_packages(tmp_path, monkeypatch):
     module = _catalog_module()
     good, broken, unmeasured = _packages(tmp_path, 3)

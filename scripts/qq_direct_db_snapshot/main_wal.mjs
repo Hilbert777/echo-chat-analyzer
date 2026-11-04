@@ -5,6 +5,7 @@ import {
   writeSync, writeFileSync, readFileSync,
 } from 'node:fs';
 import { createCipheriv, createDecipheriv, createHash, createHmac, pbkdf2Sync, randomBytes } from 'node:crypto';
+import { setImmediate as yieldRead } from 'node:timers/promises';
 
 // Capture the module bytes at evaluation, never a database fingerprint.
 export const captureCodeHash = createHash('sha256').update(readFileSync(new URL(import.meta.url))).digest('hex');
@@ -92,7 +93,7 @@ function walHeader(header) {
   return { littleEndian, initial, salt: header.subarray(16, 24) };
 }
 
-function readCommittedWal(path, boundary, onPhase = () => {}, retainPages = true) {
+async function readCommittedWal(path, boundary, onPhase = () => {}, retainPages = true, check = () => {}) {
   const fd = openSync(path, 'r');
   try {
     const bytes = fstatSync(fd).size;
@@ -118,6 +119,7 @@ function readCommittedWal(path, boundary, onPhase = () => {}, retainPages = true
     let batch = Buffer.alloc(0), batchStart = 0;
     for (let index = 0; index < available; index++) {
       if (index >= batchStart + batch.length / frameSize) {
+        await yieldRead(); check();
         batchStart = index;
         batch = readExactly(fd, Math.min(256, available - index) * frameSize, 32 + index * frameSize);
       }
@@ -196,12 +198,12 @@ function decryptPage(encrypted, pageNumber, key, salt) {
 
 // Windows little-endian WAL-index witness. Both header copies and their
 // checksum must agree; missing/torn/unsupported SHM is never an optional guard.
-function checkpointWitness(mainPath, observe = () => {}) {
+async function checkpointWitness(mainPath, observe = () => {}, readWitness = null) {
   const path = `${mainPath}-shm`;
   if (!existsSync(path)) fail('checkpoint_witness_missing');
   const fd = openSync(path, 'r');
   try {
-    const bytes = readExactly(fd, 136, 0);
+    const bytes = readWitness ? await readWitness() : readExactly(fd, 136, 0);
     const header = bytes.subarray(0, 48);
     const witness = { boundary: header.readUInt32LE(16), mxFrame: header.readUInt32LE(16),
       nBackfill: bytes.readUInt32LE(96), attempted: bytes.readUInt32LE(128),
@@ -218,7 +220,7 @@ function checkpointWitness(mainPath, observe = () => {}) {
     const backfill = bytes.readUInt32LE(96);
     const attempted = bytes.readUInt32LE(128);
     if (!boundary || backfill > attempted || attempted > boundary) fail('checkpoint_state_invalid');
-    const repeated = readExactly(fd, 136, 0);
+    const repeated = readWitness ? await readWitness() : readExactly(fd, 136, 0);
     let shmIdentityStable, descriptorIdentity, pathnameIdentity;
     // Preserve the original predicate and its short-circuit order. If identity
     // was skipped, sample it only for diagnostics, without changing rejection.
@@ -275,10 +277,11 @@ function mainPathIdentity(path) {
   try { return identity(fd); }
   finally { closeSync(fd); }
 }
-function mainFingerprint(fd) {
+async function mainFingerprint(fd, check) {
   const digest = createHash('sha256');
   const size = fstatSync(fd).size;
   for (let offset = 0; offset < size; offset += 1024 * 1024) {
+    await yieldRead(); check();
     digest.update(readExactly(fd, Math.min(1024 * 1024, size - offset), offset));
   }
   return digest.digest('hex');
@@ -308,6 +311,11 @@ export function finalizeStandaloneSnapshot(path, pageCount, onDiagnostic = () =>
   try {
     const header = readExactly(fd, 100, 0);
     const fileBytes = fstatSync(fd).size;
+    // SQLite 3.54.1 lockBtree() uses a nonzero, counter-valid header size
+    // unless it exceeds the Pager size. Preallocated trailing capacity is legal.
+    // Zero or stale header sizes fall back to the already verified image size.
+    const pageCountValid = header.readUInt32BE(28) === 0 || header.readUInt32BE(24) !== header.readUInt32BE(92) ||
+      header.readUInt32BE(28) <= pageCount;
     observe({file_bytes: fileBytes, file_size_matches: fileBytes === pageCount * PAGE_SIZE,
       sqlite_signature_valid: header.subarray(0, 16).equals(HEADER),
       page_size_valid: header.readUInt16BE(16) === PAGE_SIZE,
@@ -316,16 +324,14 @@ export function finalizeStandaloneSnapshot(path, pageCount, onDiagnostic = () =>
       header_count_nonzero: header.readUInt32BE(28) !== 0,
       header_counters_equal: header.readUInt32BE(24) === header.readUInt32BE(92),
       header_pages_match_commit: header.readUInt32BE(28) === pageCount,
-      page_count_valid: header.readUInt32BE(28) === 0 || header.readUInt32BE(24) !== header.readUInt32BE(92) ||
-        header.readUInt32BE(28) === pageCount});
+      page_count_valid: pageCountValid});
     if (!Number.isSafeInteger(pageCount) || pageCount < 1 ||
         fileBytes !== pageCount * PAGE_SIZE) {
       fail('plaintext_snapshot_invalid');
     }
     if (!header.subarray(0, 16).equals(HEADER) || header.readUInt16BE(16) !== PAGE_SIZE ||
         ![1, 2].includes(header[18]) || header[19] !== header[18] ||
-        (header.readUInt32BE(28) !== 0 && header.readUInt32BE(24) === header.readUInt32BE(92) &&
-         header.readUInt32BE(28) !== pageCount)) {
+        !pageCountValid) {
       fail('plaintext_header_invalid');
     }
     // SQLite WAL mode (2/2) can require writable auxiliary files even for
@@ -347,13 +353,18 @@ export function createSnapshot(options) {
   if (!options.passphrase) fail('passphrase_unavailable');
   return capture(options, true);
 }
-function capture({ mainPath, walPath, outputPath, passphrase, onPhase = () => {}, onDiagnostic = () => {} }, plaintext) {
+async function capture({ mainPath, walPath, outputPath, passphrase, onPhase = () => {}, onDiagnostic = () => {},
+  readWitness = null, signal, deadline = Infinity }, plaintext) {
+  const check = () => {
+    if (signal?.aborted || performance.now() >= deadline) fail('capture_cancelled');
+  };
+  check();
   // Observability is best effort and cannot influence capture or its guards.
   const observe = (failureStage, witness = {}) => {
     try { onDiagnostic({ failureStage, ...witness }); } catch {}
   };
   observe('shm_witness');
-  const before = checkpointWitness(mainPath, witness => observe('shm_witness', witness));
+  const before = await checkpointWitness(mainPath, witness => observe('shm_witness', witness), readWitness);
   observe('main_identity');
   const mainFd = openSync(mainPath, 'r');
   let outputFd = null;
@@ -365,10 +376,10 @@ function capture({ mainPath, walPath, outputPath, passphrase, onPhase = () => {}
     observe('wal_identity');
     const walIdentity = identityPath(walPath);
     observe('main_stability');
-    const initialDigest = mainFingerprint(mainFd);
+    const initialDigest = await mainFingerprint(mainFd, check);
     onPhase('main_baseline_read');
     observe('wal_prefix');
-    const wal = readCommittedWal(walPath, before.boundary, onPhase);
+    const wal = await readCommittedWal(walPath, before.boundary, onPhase, true, check);
     if (wal.identity !== walIdentity) fail('wal_replaced');
     matchesWitness(wal, before);
     // Freeze the observed committed index. Later commits cannot move this end mark.
@@ -392,16 +403,31 @@ function capture({ mainPath, walPath, outputPath, passphrase, onPhase = () => {}
     outputFd = openSync(outputPath, 'wx', 0o600);
     ownedOutput = true;
     if (!plaintext) writeExactly(outputFd, prefix);
+    let mainBatch = Buffer.alloc(0), mainBatchStart = 0;
+    const outputBatch = Buffer.alloc(256 * PAGE_SIZE);
+    let outputPages = 0;
     for (let number = 1; number <= pageCount; number++) {
+      if ((number - 1) % 256 === 0) { await yieldRead(); check(); }
+      if (!wal.pages.has(number) && number <= mainPages &&
+          (number < mainBatchStart || number >= mainBatchStart + mainBatch.length / PAGE_SIZE)) {
+        mainBatchStart = number;
+        mainBatch = readExactly(mainFd, Math.min(256, Math.min(mainPages, pageCount) - number + 1) * PAGE_SIZE,
+          PREFIX_SIZE + (number - 1) * PAGE_SIZE);
+      }
       const encrypted = wal.pages.get(number) ??
         (number <= mainPages
-          ? readExactly(mainFd, PAGE_SIZE, PREFIX_SIZE + (number - 1) * PAGE_SIZE)
+          ? mainBatch.subarray((number - mainBatchStart) * PAGE_SIZE, (number - mainBatchStart + 1) * PAGE_SIZE)
           : null);
       if (!encrypted) fail('new_page_missing_from_wal');
       if (number === 1 && !encrypted.subarray(0, 16).equals(salt)) fail('page_one_salt_mismatch');
       if (number === 1) selectedPageOne = encrypted;
-      writeExactly(outputFd, plaintext ? decryptPage(encrypted, number, key, salt) : encrypted);
-      onPhase('output_page_written');
+      (plaintext ? decryptPage(encrypted, number, key, salt) : encrypted).copy(outputBatch, outputPages * PAGE_SIZE);
+      outputPages++;
+      if (outputPages === 256 || number === pageCount) {
+        writeExactly(outputFd, outputBatch.subarray(0, outputPages * PAGE_SIZE));
+        for (let index = 0; index < outputPages; index++) onPhase('output_page_written');
+        outputPages = 0;
+      }
     }
     closeSync(outputFd);
     outputFd = null;
@@ -418,17 +444,17 @@ function capture({ mainPath, walPath, outputPath, passphrase, onPhase = () => {}
     }
     observe('main_stability');
     if (initialMainState !== fileState(mainPath) || identity(mainFd) !== mainPathIdentity(mainPath) ||
-        initialDigest !== mainFingerprint(mainFd)) fail('main_changed_during_read');
+        initialDigest !== await mainFingerprint(mainFd, check)) fail('main_changed_during_read');
     // Revalidate every byte and every rolling checksum through the frozen end
     // mark, not just the eight stored bytes on the last frame.
     observe('wal_prefix');
     // Verification still re-reads every byte and checksum, but needs no second
     // copy of all committed pages while the first copy is still retained.
-    const latest = readCommittedWal(walPath, before.boundary, undefined, false);
+    const latest = await readCommittedWal(walPath, before.boundary, undefined, false, check);
     if (walIdentity !== identityPath(walPath) || latest.identity !== walIdentity || !latest.header.equals(wal.header) ||
         latest.fingerprint !== wal.fingerprint) fail('wal_boundary_changed');
     observe('checkpoint_witness');
-    const after = checkpointWitness(mainPath, witness => observe('checkpoint_witness', witness));
+    const after = await checkpointWitness(mainPath, witness => observe('checkpoint_witness', witness), readWitness);
     if (before.identity !== after.identity || before.pathIdentity !== after.pathIdentity ||
         !before.salt.equals(after.salt) || after.boundary < before.boundary ||
         after.attempted !== before.attempted || after.backfill !== before.backfill) {
@@ -436,6 +462,7 @@ function capture({ mainPath, walPath, outputPath, passphrase, onPhase = () => {}
     }
     // If no append occurred, the indexed commit itself must remain identical.
     if (after.boundary === before.boundary) matchesWitness(latest, after);
+    check();
     if (plaintext) finalizeStandaloneSnapshot(outputPath, pageCount);
     published = true;
     return {
@@ -474,7 +501,7 @@ function encryptPage(plain, number, key, hmacKey, salt) {
 }
 
 // Build a completely fictional encrypted fixture, preserving SQLite WAL framing.
-export function encryptFixture({ plainMainPath, plainWalPath, encryptedMainPath, encryptedWalPath, passphrase }) {
+export async function encryptFixture({ plainMainPath, plainWalPath, encryptedMainPath, encryptedWalPath, passphrase }) {
   const salt = randomBytes(16);
   const key = keyFor(passphrase, salt);
   const hmacKey = randomBytes(32);
@@ -515,7 +542,7 @@ export function encryptFixture({ plainMainPath, plainWalPath, encryptedMainPath,
     closeSync(walFd);
     closeSync(outWalFd);
   }
-  const wal = readCommittedWal(encryptedWalPath);
+  const wal = await readCommittedWal(encryptedWalPath);
   const index = Buffer.alloc(136);
   index.writeUInt32LE(3007000, 0);
   index[12] = 1;

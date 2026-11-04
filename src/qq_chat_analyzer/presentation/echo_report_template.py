@@ -1257,6 +1257,12 @@ document.documentElement.classList.add("js-ready");
   "use strict";
 
   var data = window.ECHO_DATA || null;
+  function memberNameMatches(member, label, query) {
+    query = query.normalize("NFKC").toLocaleLowerCase("zh-CN");
+    return [label].concat(member.search_names || []).some(function (name) {
+      return String(name || "").normalize("NFKC").toLocaleLowerCase("zh-CN").includes(query);
+    });
+  }
   var overview = data && data.overview ? data.overview : null;
   var conversation = data && data.conversation ? data.conversation : null;
   var hasData = Boolean(overview && overview.has_data);
@@ -1638,7 +1644,7 @@ document.documentElement.classList.add("js-ready");
       document.getElementById("session-openers-search").addEventListener("input", function (event) {
         var query = event.target.value.trim().toLowerCase(), matches = 0;
         rows.forEach(function (row, index) {
-          row.hidden = !people[index].display_name.toLowerCase().includes(query);
+          row.hidden = !memberNameMatches(people[index], people[index].display_name, query);
           if (!row.hidden) matches++;
         });
         setHidden("session-openers-empty", matches > 0);
@@ -2208,7 +2214,7 @@ document.documentElement.classList.add("js-ready");
       memberOptions.textContent = "";
       var query = memberSearch.value.trim().toLocaleLowerCase();
       allStickerMembers.forEach(function (member, index) {
-        if (member.label.toLocaleLowerCase().indexOf(query) < 0) { return; }
+        if (!memberNameMatches(member, member.label, query)) { return; }
         var label = document.createElement("label");
         var checkbox = document.createElement("input");
         checkbox.type = "checkbox";

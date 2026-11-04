@@ -95,6 +95,27 @@ def _service(tmp_path: Path, **kwargs) -> QQDirectDatabaseImportService:
 # ------------------------------------------------------------------ service
 
 
+def test_group_member_card_and_friend_remark_join_only_by_uin(tmp_path):
+    from qq_chat_analyzer.providers.napcat_qq_provider import NapCatFriend
+    service, runtime, snapshot = _service(tmp_path)
+    with sqlite3.connect(snapshot) as connection:
+        connection.execute('UPDATE group_msg_table SET "40033" = ?', ("123456789",))
+    runtime.get_group_member_all = lambda _: {"result": {"infos": {
+        "opaque-map-key": {"uin": "123456789", "cardName": "虚构群名片", "nick": "虚构昵称"}}}}
+    friends = [NapCatFriend("fictional-uid", "123456789", "虚构昵称", "虚构备注"),
+               NapCatFriend("other-uid", "234567890", "虚构昵称", "另一个人的备注")]
+    provider = SimpleNamespace(list_groups=lambda **_: [], list_friends=lambda **_: friends)
+    service._provider_factory = SimpleNamespace(create=lambda: provider)
+    with service.acquired_session(GROUP_SESSION_ID) as acquisition:
+        payload = json.loads(acquisition.payload_path.read_text(encoding="utf-8"))
+        messages, warnings = parse_qq_db_rich_messages(payload)
+        assert not warnings and len(messages) == 1
+        sender = messages[0].sender
+        assert sender.identity_id == "123456789"
+        assert (sender.remark, sender.contextual_name, sender.nickname) == ("虚构备注", "虚构群名片", "虚构昵称")
+        assert runtime.cleaned == ["gen-0001"]
+
+
 def test_payload_materialized_before_generation_release(tmp_path: Path) -> None:
     """The plaintext generation is gone before the analysis consumer runs."""
     service, runtime, _ = _service(tmp_path)

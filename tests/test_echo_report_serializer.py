@@ -589,7 +589,8 @@ def test_group_openers_keep_each_identity_unknowns_and_display_names():
     assert sum(row["count"] for row in payload["members"]) + payload["unknown_count"] == 7
     assert len({row["display_name"] for row in payload["members"]}) == 4
     assert payload["members"][-1]["display_name"].startswith("未命名成员")
-    assert all(set(row) == {"display_name", "count", "is_viewer"} for row in payload["members"])
+    assert all(set(row) == {"display_name", "count", "is_viewer", "search_names"} for row in payload["members"])
+    assert payload["members"][0]["search_names"] == ("同名",)
     assert "fictional" not in repr(report.group_stats)
 
 

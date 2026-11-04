@@ -671,6 +671,26 @@ def test_export_session_json_writes_self_username_from_account_dir(
     assert payload["conversation"]["self_username"] == "wxid_owner"
 
 
+def test_contact_aliases_survive_export_and_import(tmp_path):
+    def runner(command, timeout, environment):
+        sql = command[command.index("--sql") + 1]
+        if "FROM contact" in sql:
+            return _FakeCompleted(stdout=_helper_result([{
+                "username": "wxid_fictional_sender", "remark": "虚构备注", "nick_name": "虚构昵称"}]))
+        if "sqlite_master" in sql:
+            return _FakeCompleted(stdout=_helper_result([{"name": message_table_name(FICTIONAL_SESSION)}]))
+        return _FakeCompleted(stdout=_helper_result([_db_row(user_name="wxid_fictional_sender")]))
+    provider = _provider(tmp_path, runner)
+    contact = tmp_path / "xwechat_files/wxid_owner/db_storage/contact/contact.db"
+    contact.parent.mkdir(parents=True, exist_ok=True)
+    contact.write_bytes(b"fictional-contact-placeholder")
+    identity = provider._contact_identities()["wxid_fictional_sender"]
+    assert (identity.remark, identity.nickname) == ("虚构备注", "虚构昵称")
+    output = provider.export_session_json(FICTIONAL_SESSION, tmp_path / "fictional.json")
+    outcome = ImportService().execute(ImportRequest(input_path=output))
+    assert (outcome.messages[0].sender_remark, outcome.messages[0].sender_nickname) == ("虚构备注", "虚构昵称")
+
+
 def test_resolve_self_username_canonicalizes_account_directory_suffix(
     tmp_path: Path,
 ) -> None:

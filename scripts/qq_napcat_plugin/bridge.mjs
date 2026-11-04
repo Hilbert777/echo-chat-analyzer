@@ -532,7 +532,7 @@ export async function startBridge(core, snapshot, {port = 40655, host = '127.0.0
     ['EchoMediaProbe.downloadPicMedia', {count: 1, valid: mediaRequest, call: downloadPicMedia}],
     ['EchoMediaProbe.readPicMediaChunk', {count: 1, valid: chunkRequest, call: readChunk}],
     ['EchoMediaProbe.releasePicMedia', {count: 1, valid: transferRequest, call: releaseTransfer}],
-    ['EchoSnapshotApi.acquire', {count: 0, call: () => snapshot.acquire()}],
+    ['EchoSnapshotApi.acquire', {count: 0, call: context => snapshot.acquire(context)}],
     ['EchoSnapshotApi.cleanup', {count: 1, valid: generation, call: id => snapshot.cleanup(id)}],
     ['EchoSnapshotApi.recover', {count: 0, call: () => snapshot.recover()}]
   ]);
@@ -599,6 +599,8 @@ export async function startBridge(core, snapshot, {port = 40655, host = '127.0.0
         return send(400, {ok: false, error: 'invalid_params'});
       }
       const acquireDeadline = acquiring ? performance.now() + acquireBudget : 0;
+      const acquireController = acquiring ? new AbortController() : null;
+      const acquireTimer = acquiring ? setTimeout(() => acquireController.abort(), acquireBudget) : null;
       let result, cleanupStarted = false;
       const cleanupAbandoned = async () => {
         if (cleanupStarted || result?.ok !== true || result.status !== 'ready' || !generation(result.generation_id)) return;
@@ -613,11 +615,14 @@ export async function startBridge(core, snapshot, {port = 40655, host = '127.0.0
           logSnapshot('abandoned_acquire_cleanup', 'failed');
         }
       };
-      if (acquiring) {
-        res.once('close', () => { if (!res.writableFinished) void cleanupAbandoned(); });
-      }
+      const onAcquireClose = () => {
+        if (!res.writableFinished) { acquireController.abort(); void cleanupAbandoned(); }
+      };
+      if (acquiring) res.once('close', onAcquireClose);
       try {
-        result = await method.call(...params);
+        result = acquiring
+          ? await method.call({ signal: acquireController.signal, deadline: acquireDeadline })
+          : await method.call(...params);
         if (acquiring && (res.destroyed || performance.now() >= acquireDeadline)) {
           logSnapshot('acquire_response_discarded', res.destroyed ? 'client_disconnected' : 'deadline_exceeded');
           await cleanupAbandoned();
@@ -630,6 +635,10 @@ export async function startBridge(core, snapshot, {port = 40655, host = '127.0.0
         if (acquiring) logSnapshot('acquire_operation', 'failed');
         // Media stages are a fixed whitelist; every other failure stays generic.
         send(200, {ok: false, error: MEDIA_STAGES.has(error?.code) ? error.code : 'qq_runtime_operation_failed'});
+      } finally {
+        // Keep the close listener until the response settles: a disconnect
+        // during the final socket flush still owns an abandoned generation.
+        if (acquiring) clearTimeout(acquireTimer);
       }
     });
   });

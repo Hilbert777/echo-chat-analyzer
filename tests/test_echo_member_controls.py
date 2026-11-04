@@ -10,6 +10,7 @@ from qq_chat_analyzer.presentation import export_echo_report_html
 from qq_chat_analyzer.presentation.models import (
     EchoLanguageMember, EchoLanguageProfile, EchoMemberExpression,
     EchoExpressionCulture, EchoExpressionItem,
+    EchoConversationSessions, EchoSessionInitiator, EchoStickers, EchoStickerMember,
 )
 from test_language_sources import _view, _message, _build
 from test_echo_conversation_sessions_frontend import _find_chromium, _run_browser
@@ -25,7 +26,9 @@ def test_member_sort_search_and_original_identity_in_offline_report(tmp_path, wi
     template = _view().members[0]
     members = tuple(replace(template, speaker_key=f"fictional-{i}", display_name=name,
         message_count=(20, 5, 100)[i], first_seen_order=(0, 1, 2)[i],
-        remark="小白" if i == 2 else None) for i, name in enumerate(names))
+        remark="小白" if i == 2 else None,
+        contextual_name="虚构群名片" if i == 2 else None,
+        nickname="虚构全局昵称" if i == 2 else None) for i, name in enumerate(names))
     language = EchoLanguageProfile("group_distinctive" if kind == "group" else "private_common", True,
         members=tuple(EchoLanguageMember(m.speaker_key, m.display_name, m.display_name, ("苹果",))
                       for m in members))
@@ -35,6 +38,12 @@ def test_member_sort_search_and_original_identity_in_offline_report(tmp_path, wi
             2, 20, 2, (expression,)) for i, m in enumerate(members)))
     view = replace(_view(), conversation_kind=kind, members=members,
                    language_profile=language, expression_culture=culture)
+    if kind == "group":
+        view = replace(view, conversation_sessions=EchoConversationSessions(
+            1800, 3, 0, 0, 0, 1, group_initiators=tuple(
+                EchoSessionInitiator(m.display_name, 1, False, m.search_names) for m in members)),
+            stickers=EchoStickers(available=True, conversation_kind="group", total_send_count=3,
+                members=tuple(EchoStickerMember(m.display_name, 1, search_names=m.search_names) for m in members)))
     messages = [_message(f"Fictional body {i} 苹果", index=i, sender=m.speaker_key)
                 for i, m in enumerate(members)]
     view = replace(view, language_sources=_build(messages, [["苹果"]] * len(messages), view=view))
@@ -55,6 +64,20 @@ def test_member_sort_search_and_original_identity_in_offline_report(tmp_path, wi
           order.value='first';order.dispatchEvent(new Event('change'));r.byFirst=keys('member-list');
           const search=tools[1].querySelector('input');search.value='小白';search.dispatchEvent(new Event('input'));
           r.byAlias=keys('member-list');search.value='not-a-person';search.dispatchEvent(new Event('input'));
+          r.allAliases=['小白','虚构群名片','虚构全局昵称'].map(alias=>{
+            const result={};
+            ['rhythm','voices','expression'].forEach((id,i)=>{
+              const input=tools[i].querySelector('input');input.value=alias;input.dispatchEvent(new Event('input'));
+              result[id]=i===0?Array.from(document.getElementById('rhythm-member').options).filter(n=>!n.hidden&&n.value).map(n=>n.value):keys(i===1?'member-list':'expression-members');
+            });
+            const opener=document.getElementById('session-openers-search');opener.value=alias;opener.dispatchEvent(new Event('input'));
+            result.openers=Array.from(document.getElementById('session-openers-list').children).filter(n=>!n.hidden).length;
+            const sticker=document.getElementById('sticker-member-search');sticker.value=alias;sticker.dispatchEvent(new Event('input'));
+            result.stickers=document.getElementById('sticker-member-options').children.length;
+            return result;
+          });
+          tools.forEach(tool=>{const input=tool.querySelector('input');input.value='';input.dispatchEvent(new Event('input'));});
+          search.value='not-a-person';search.dispatchEvent(new Event('input'));
           r.empty=keys('member-list').length===0&&!document.getElementById('voices-member-empty').hidden;
           search.value='';search.dispatchEvent(new Event('input'));r.restored=keys('member-list').length===3;
           const exprOrder=tools[2].querySelector('select');exprOrder.value='expressions';
@@ -91,6 +114,8 @@ def test_member_sort_search_and_original_identity_in_offline_report(tmp_path, wi
         assert result["original"] == "Fictional body 1 苹果"
         assert result["byFirst"] == ["fictional-0", "fictional-1", "fictional-2"]
         assert result["byAlias"] == ["fictional-2"]
+        assert result["allAliases"] == [dict(rhythm=["fictional-2"], voices=["fictional-2"],
+            expression=["fictional-2"], openers=1, stickers=1)] * 3
         assert result["byExpression"] == ["fictional-1", "fictional-2", "fictional-0"]
         assert result["empty"] and result["restored"] and result["rhythmScopeStable"] and result["rhythmRestored"]
         assert result["rhythmMatches"] == ["", "fictional-2"]

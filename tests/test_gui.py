@@ -1197,7 +1197,7 @@ def test_qq_gui_reads_fresh_qr_from_auth_workspace(qt_app, tmp_path, runtime_mod
     facade.start_qq_auth_flow()
     workspace._show_qq_status(_qq_snapshot("waiting_auth"), False)
     assert workspace._qq_qrcode_label.isHidden()
-    assert workspace._qq_guide_label.text() == "等待 QQ 登录，请在 QQ 登录窗口完成登录。"
+    assert workspace._qq_guide_label.text() == "等待二维码出现，请不要打开 QQ。"
     assert "扫码" not in workspace._qq_login_guide_label.text()
     _write_qrcode_png(qr)
     workspace._show_qq_status(_qq_snapshot("waiting_auth"), False)
@@ -1934,6 +1934,28 @@ def _search_window(qt_app, sources):
     window.show_local_data_page()
     _drain(window)
     return window, facade, records
+
+
+def test_session_search_matches_both_names_without_merging_identity(qt_app):
+    from qq_chat_analyzer.gui.session_analysis_panel import SessionAnalysisPanel
+    from qq_chat_analyzer.application.facade import ChatSource, SessionInfo
+    first = SessionInfo(ChatSource.QQ, "private:one", "虚构备注", search_names=("虚构备注", "虚构昵称"))
+    second = SessionInfo(ChatSource.QQ, "private:two", "另一个人", search_names=("另一个人", "虚构昵称"))
+    panel = SessionAnalysisPanel()
+    panel.populate_sessions([first, second])
+    for query, expected in (("虚构备注", [first]), ("虚构昵称", [first, second]), ("另一个人", [second])):
+        panel._session_search.setText(query)
+        assert panel._session_list.count() == len(expected)
+        assert [panel._session_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(len(expected))] == [s.session_id for s in expected]
+
+
+def test_history_search_accepts_report_member_aliases(qt_app, sources):
+    window, facade, records = _search_window(qt_app, sources)
+    records[1] = dataclasses.replace(records[1], search_names=("Fictional Remark", "Fictional Nick"))
+    window.local_data_page._reports = records
+    for query in ("Fictional Remark", "Fictional Nick"):
+        window.local_data_page._search_input.setText(query)
+        assert window.local_data_page._visible_names == (records[1].package_name,)
 
 
 @pytest.mark.parametrize("action", ["button", "double_click"])

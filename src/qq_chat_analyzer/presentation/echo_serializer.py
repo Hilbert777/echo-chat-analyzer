@@ -124,6 +124,7 @@ def _stickers_to_dict(chapter: EchoStickers | None) -> dict[str, object] | None:
         "covered_message_count": chapter.covered_message_count,
         "members": [{
             "label": member.label, "send_count": member.send_count,
+            "search_names": list(member.search_names),
             "message_count": member.message_count, "per_hundred_messages": member.per_hundred_messages,
             "unique_material_count": member.unique_material_count,
             "top_materials": [_sticker_item_to_dict(item) for item in member.top_materials],
@@ -406,6 +407,7 @@ def _member_to_dict(
         "secondary_name": member.secondary_name,
         "remark": member.remark,
         "contextual_name": member.contextual_name,
+        "search_names": list(member.search_names),
         "is_viewer": member.is_viewer,
         "message_count": member.message_count,
         "first_seen_order": member.first_seen_order,

@@ -52,6 +52,7 @@ class QQSession:
     message_count: int | None = None
     last_message_time: int | None = None
     peer_uin: str = ""
+    search_names: tuple[str, ...] = ()
 
     @property
     def session_id(self) -> str:

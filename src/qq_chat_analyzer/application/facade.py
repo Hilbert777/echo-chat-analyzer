@@ -219,6 +219,7 @@ class SessionInfo:
     message_available: bool = True
     unavailable_reason: str | None = None
     last_message_time: int | None = None
+    search_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -2422,6 +2423,7 @@ def _to_session_info(source: ChatSource, raw_session: Any) -> SessionInfo:
             getattr(raw_session, "message_available", True)
         ),
         unavailable_reason=getattr(raw_session, "unavailable_reason", None),
+        search_names=tuple(getattr(raw_session, "search_names", ())),
     )
 
 

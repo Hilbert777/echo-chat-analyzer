@@ -971,13 +971,13 @@ class SessionAnalysisPanel(QWidget):
         """Filter and sort the cached sessions for the current controls."""
         if not self._sessions_ready:
             return
-        query = self._session_search.text().strip().lower()
+        query = self._session_search.text().strip().casefold()
         sort_mode = self._session_sort.currentData() or _SESSION_SORT_ORDER[0][1]
         indexed = list(enumerate(self._sessions_data))
         filtered = [
             (index, session)
             for index, session in indexed
-            if query in session.display_name.lower()
+            if any(query in name.casefold() for name in (session.display_name, *session.search_names))
         ]
         if sort_mode == _SESSION_SORT_ORDER[2][1]:
             filtered.sort(

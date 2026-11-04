@@ -51,8 +51,7 @@ ECHO_MEMBER_CONTROLS_JS = r"""
       var key = section.select ? node.value : node.dataset.speakerKey;
       var info = members.get(key), member = info ? info.member : {};
       return {node: node, key: key, member: member, index: info ? info.index : index,
-        search: [member.display_name, member.primary_name, member.secondary_name,
-                 member.remark, member.contextual_name].map(normalized).join("\n")};
+        search: [member.display_name].concat(member.search_names || []).map(normalized).join("\n")};
     });
     if (!entries.length) return;
     tools.hidden = false;

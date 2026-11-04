@@ -7,13 +7,13 @@ if (process.argv[1]?.endsWith('main_wal_poc.mjs')) {
   const passphrase = process.env.ECHO_POC_PASSPHRASE;
   try {
     if (mode === 'merge' && paths.length === 3) {
-      const result = createMergedEncryptedDatabase({ mainPath: paths[0], walPath: paths[1], outputPath: paths[2] });
+      const result = await createMergedEncryptedDatabase({ mainPath: paths[0], walPath: paths[1], outputPath: paths[2] });
       console.log(JSON.stringify({ ok: true, ...result }));
     } else if (mode === 'snapshot' && paths.length === 3) {
-      const result = createSnapshot({ mainPath: paths[0], walPath: paths[1], outputPath: paths[2], passphrase });
+      const result = await createSnapshot({ mainPath: paths[0], walPath: paths[1], outputPath: paths[2], passphrase });
       console.log(JSON.stringify({ ok: true, ...result }));
     } else if (mode === 'fixture' && paths.length === 4) {
-      encryptFixture({ plainMainPath: paths[0], plainWalPath: paths[1], encryptedMainPath: paths[2], encryptedWalPath: paths[3], passphrase });
+      await encryptFixture({ plainMainPath: paths[0], plainWalPath: paths[1], encryptedMainPath: paths[2], encryptedWalPath: paths[3], passphrase });
       console.log(JSON.stringify({ ok: true, fixture: true }));
     } else {
       fail('arguments_invalid');

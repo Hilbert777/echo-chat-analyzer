@@ -1,6 +1,8 @@
 """Stage 3.5J: real acquisition seam, fictional encrypted main/WAL only."""
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -21,7 +23,7 @@ def fictional_source(poc_source):
 
 def _formal(program):
     program = program.replace(
-        "const result = fn({mainPath, walPath, outputPath, passphrase: process.env.ECHO_POC_PASSPHRASE, onPhase});",
+        "const result = await fn({mainPath, walPath, outputPath, passphrase: process.env.ECHO_POC_PASSPHRASE, onPhase});",
         """
   const {createEchoSnapshotApi} = await import('./scripts/qq_direct_db_snapshot/snapshot.mjs');
   const path = await import('node:path');
@@ -137,10 +139,134 @@ def test_published_single_file_needs_no_wal_or_shm(fictional_source):
     assert wal.read_bytes().startswith(original[1])
 
 
+@pytest.mark.parametrize('header_pages,counters_equal,accepted', [
+    (2, True, True),
+    (8, True, True),
+    (9, True, False),
+    (0, True, True),
+    (9, False, True),
+])
+def test_standalone_header_size_uses_sqlite_bounds(tmp_path, header_pages, counters_equal, accepted):
+    """Reject a valid size beyond the image, not legal trailing capacity."""
+    output = tmp_path / 'snapshot.db'
+    original = bytearray(8 * 4096)
+    original[:16] = b'SQLite format 3\0'
+    original[16:20] = b'\x10\x00\x02\x02'
+    original[24:28] = (1).to_bytes(4, 'big')
+    original[28:32] = header_pages.to_bytes(4, 'big')
+    original[92:96] = (1 if counters_equal else 2).to_bytes(4, 'big')
+    output.write_bytes(original)
+    result = subprocess.run([
+        'node', '--input-type=module', '-e', """
+import {finalizeStandaloneSnapshot} from './scripts/qq_direct_db_snapshot/main_wal.mjs';
+const diagnostic={};
+try {
+  finalizeStandaloneSnapshot(process.argv[1],8,value=>Object.assign(diagnostic,value));
+  console.log(JSON.stringify({ok:true,diagnostic}));
+} catch(error) {console.log(JSON.stringify({ok:false,code:error.code,diagnostic}));}
+""", str(output)], cwd=Path(__file__).resolve().parents[1],
+        capture_output=True, text=True, timeout=30, check=True)
+    result = json.loads(result.stdout)
+    assert result['ok'] is accepted, result
+    assert result['diagnostic']['header_pages_match_commit'] is (header_pages == 8)
+    assert result['diagnostic']['page_count_valid'] is accepted
+    if accepted:
+        original[18:20] = b'\x01\x01'
+    else:
+        assert result['code'] == 'plaintext_header_invalid'
+    assert output.read_bytes() == original
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='requires the pinned Windows SQLite DLL')
+def test_preallocated_snapshot_publication_with_pinned_sqlite(tmp_path):
+    """The formal capture must publish a readable 2-page DB in an 8-page file."""
+    # Select the pinned DLL before importing sqlite3 in an isolated interpreter;
+    # never replace the pytest process's already-loaded SQLite library.
+    result = subprocess.run([sys.executable, '-c', r"""
+import ctypes, hashlib, json, os, sys
+from contextlib import closing
+from pathlib import Path
+project, work = map(Path, sys.argv[1:])
+pins = json.loads((project / 'scripts/sqlite_runtime_pins.json').read_text())
+dll = project / 'runtime/sqlite/sqlite3.dll'
+assert hashlib.sha256(dll.read_bytes()).hexdigest() == pins['dllSha256']
+library = ctypes.CDLL(str(dll))
+import sqlite3
+assert sqlite3.sqlite_version == pins['version'] == '3.54.1'
+with closing(sqlite3.connect(':memory:')) as db:
+    assert db.execute('SELECT sqlite_source_id()').fetchone() == (pins['sourceId'],)
+sys.path.insert(0, str(project / 'tests'))
+from test_qq_direct_main_wal_poc import _reserve_48_bytes, _run, _interleave
+from test_qq_direct_main_wal_acquisition import _formal
+plain = work / 'plain.db'
+_reserve_48_bytes(plain)
+library.sqlite3_open.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p)]
+library.sqlite3_file_control.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int, ctypes.c_void_p]
+library.sqlite3_exec.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+library.sqlite3_close.argtypes = [ctypes.c_void_p]
+handle = ctypes.c_void_p()
+assert library.sqlite3_open(os.fsencode(plain), ctypes.byref(handle)) == 0
+try:
+    chunk = ctypes.c_int(32768)  # Official VFS rounding, not fabricated header bytes.
+    assert library.sqlite3_file_control(handle, b'main', 6, ctypes.byref(chunk)) == 0
+    assert library.sqlite3_exec(handle, b'''
+        CREATE TABLE entries(id INTEGER PRIMARY KEY, body TEXT);
+        INSERT INTO entries VALUES(1,'fictional baseline');
+        PRAGMA journal_mode=WAL;
+        PRAGMA wal_checkpoint(TRUNCATE);
+    ''', None, None, None) == 0
+finally:
+    assert library.sqlite3_close(handle) == 0
+assert plain.stat().st_size == 8 * 4096
+assert int.from_bytes(plain.read_bytes()[28:32], 'big') == 2
+source = work / 'source'
+source.mkdir()
+main, wal, output = source / 'encrypted.db', source / 'encrypted.db-wal', work / 'snapshot.db'
+with closing(sqlite3.connect(plain)) as writer:
+    writer.execute('PRAGMA wal_autocheckpoint=0')
+    writer.execute("UPDATE entries SET body='fictional selected' WHERE id=1")
+    writer.commit()
+    assert writer.execute('PRAGMA page_count').fetchone() == (2,)
+    frames = Path(f'{plain}-wal').read_bytes()
+    assert len(frames) == 32 + 4120
+    assert int.from_bytes(frames[32:36], 'big') == 2  # No Page 1 in the WAL.
+    assert int.from_bytes(frames[36:40], 'big') == 8
+    _run('fixture', plain, Path(f'{plain}-wal'), main, wal)
+    original = [p.read_bytes() for p in (main, wal, Path(f'{main}-shm'))]
+    def driver(program):
+        return _formal(program).replace(
+            'fs.writeFileSync(target,Buffer.concat(pages));',
+            "fs.writeFileSync(target,Buffer.concat(pages));fs.copyFileSync(target,outputPath+'.raw');")
+    acquired = _interleave((main, wal, output), '', driver_transform=driver)
+    assert acquired['ok'], acquired
+    assert acquired['mergedConsumed'] and not acquired['mainOnly']
+    assert acquired['stagingCleaned'] and acquired['recovered'] and not acquired['encryptedPublished']
+    assert [p.read_bytes() for p in (main, wal, Path(f'{main}-shm'))] == original
+raw, final = Path(f'{output}.raw').read_bytes(), output.read_bytes()
+assert len(final) == 8 * 4096
+assert int.from_bytes(final[28:32], 'big') == 2
+assert final[24:28] == final[92:96]
+assert raw[18:20] == b'\x02\x02' and final[18:20] == b'\x01\x01'
+assert raw[:18] == final[:18] and raw[20:] == final[20:]
+# Deny the sidecar namespace: the published file must stand alone.
+Path(f'{output}-wal').mkdir()
+Path(f'{output}-shm').mkdir()
+with closing(sqlite3.connect(f'{output.as_uri()}?mode=ro', uri=True)) as reader:
+    assert reader.execute('PRAGMA page_count').fetchone() == (2,)
+    assert reader.execute('PRAGMA quick_check').fetchall() == [('ok',)]
+    assert reader.execute("SELECT name FROM sqlite_schema WHERE type='table'").fetchall() == [('entries',)]
+    assert reader.execute('SELECT id,body FROM entries').fetchall() == [(1,'fictional selected')]
+print('pinned SQLite 3.54.1: physical=8 header=2 page_count=2 quick_check=ok query=ok')
+""", str(Path(__file__).resolve().parents[1]), str(tmp_path)],
+        capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 @pytest.mark.parametrize('mutation', [
     "fs.truncateSync(target,4096);",
     "fs.appendFileSync(target,Buffer.alloc(4096));",
     "const b=fs.readFileSync(target);b[0]^=1;fs.writeFileSync(target,b);",
+    "const b=fs.readFileSync(target);b.writeUInt16BE(1024,16);fs.writeFileSync(target,b);",
     "const b=fs.readFileSync(target);b[19]=3;fs.writeFileSync(target,b);",
     "const b=fs.readFileSync(target);b[19]=1;fs.writeFileSync(target,b);",
     "const b=fs.readFileSync(target);b.writeUInt32BE(99,28);fs.writeFileSync(target,b);",
