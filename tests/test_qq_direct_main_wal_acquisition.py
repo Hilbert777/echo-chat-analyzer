@@ -105,6 +105,56 @@ def test_formal_append_after_boundary_succeeds(fictional_source):
         assert db.execute("SELECT body FROM entries").fetchone() == ("fictional selected",)
 
 
+def test_streamed_upstream_decrypt_publishes_a_valid_sqlite_generation(fictional_source):
+    """Use the actual bounded NapCat decoder at the formal acquisition seam."""
+    root = Path(__file__).resolve().parents[1]
+    pins = json.loads((root / 'scripts/qq_napcat_runtime_pins.json').read_text(encoding='utf-8'))
+    replacement = pins['napcatPatch']['replacements'][4]['replacement']
+    capsule = (root / 'tests/fixtures/napcat_41834_database_crypto.mjs').read_text(encoding='utf-8')
+
+    def driver(program):
+        program = _formal(program)
+        start = program.index('      const encrypted=fs.readFileSync(source)')
+        end = program.index('      return true;', start) + len('      return true;')
+        decoder = 'const GL=createDecipheriv,aI=pbkdf2Sync,$e=fs,xe=path;\n' + capsule + '\n' + replacement
+        decoder += '\nreturn Boolean(zE(source,Buffer.from(process.env.ECHO_POC_PASSPHRASE),target));'
+        return program[:start] + decoder + program[end:]
+
+    result = _interleave(fictional_source, '', driver_transform=driver)
+    assert result['ok'] and result['decryptCalls'] == 1, result
+    assert result['mergedConsumed'] and not result['mainOnly']
+    assert not result['encryptedPublished'] and result['stagingCleaned'] and result['recovered']
+    import sqlite3
+    with sqlite3.connect(fictional_source[2]) as db:
+        assert db.execute('PRAGMA integrity_check').fetchone() == ('ok',)
+        assert db.execute('SELECT body FROM entries').fetchone() == ('fictional selected',)
+
+
+def test_guarded_timestamp_change_with_identical_content_reaches_decryption(fictional_source):
+    """A file-time update alone is not evidence that captured pages changed."""
+    action = "const s=fs.statSync(mainPath);fs.utimesSync(mainPath,s.atime,new Date(s.mtimeMs+2000));"
+    result = _acquire(fictional_source, action, phase='main_baseline_read')
+    assert result['ok'] and result['decryptCalls'] == 1, result
+    assert result['stagingCleaned'] and result['recovered']
+    import sqlite3
+    with sqlite3.connect(fictional_source[2]) as db:
+        assert db.execute('PRAGMA integrity_check').fetchone() == ('ok',)
+        assert db.execute('SELECT body FROM entries').fetchone() == ('fictional selected',)
+
+
+def test_guarded_content_change_restored_after_merge_is_rejected_before_decrypt(fictional_source):
+    """Equal before/after hashes alone must not admit an image read in between."""
+    def driver(program):
+        return _formal(program).replace('let fired = false;', 'let originalMain;let fired = false;').replace(
+            '  if (current !== phase || fired) return;',
+            "  if(current==='output_complete' && originalMain)fs.writeFileSync(mainPath,originalMain);\n"
+            '  if (current !== phase || fired) return;')
+    action = "originalMain=fs.readFileSync(mainPath);const changed=Buffer.from(originalMain);changed[1200]^=1;fs.writeFileSync(mainPath,changed);"
+    result = _interleave(fictional_source, action, phase='main_baseline_read', driver_transform=driver)
+    assert not result['ok'] and result['decryptCalls'] == 0, result
+    assert result['stagingCleaned'] and result['recovered']
+
+
 def test_published_single_file_needs_no_wal_or_shm(fictional_source):
     """A merged WAL image must remain readable when sidecars cannot be created."""
     import sqlite3

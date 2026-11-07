@@ -59,6 +59,8 @@ if (!allowed.has("napcat-plugin-echo") || allowed.has("untrusted-plugin") || all
   throw Error("whitelist scope changed");
 '''
     pins = json.loads(PINS.read_text(encoding="utf-8"))
+    # Include the upstream file-decrypt site without executing it in this key test.
+    capsule += "\n" + pins["napcatPatch"]["replacements"][4]["anchor"]
     patched = load_builder().apply_napcat_patch(capsule, pins["napcatPatch"])
     result = subprocess.run([node, "--input-type=module", "-e",
                              patched + f"\nawait boot({str(early).lower()});"],
@@ -79,6 +81,8 @@ def test_official_41834_archive_and_distribution_contract(tmp_path):
     assert bundle_path.stat().st_size == 29500688
     with zipfile.ZipFile(bundle_path) as bundle:
         text = bundle.read("napcat.mjs").decode("utf-8")
+        crypto_capsule = (ROOT / "tests/fixtures/napcat_41834_database_crypto.mjs").read_text(encoding="utf-8")
+        assert crypto_capsule[crypto_capsule.index("const T8 ="):].rstrip() in text
         # Both PacketBackend and the passphrase listener's PacketHandler need
         # exact-build offsets; merely passing the minimum QQ build is insufficient.
         offsets = re.findall(r'"9\.9\.36-53644-x64": \{ send: "([0-9A-F]+)", recv: "([0-9A-F]+)" \}', text)

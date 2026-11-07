@@ -80,11 +80,29 @@ def _client(transport, *, base_url: str = "http://127.0.0.1:40654", root: Path |
         base_url=base_url,
         snapshot_root=root or Path("."),
         transport=transport,
+        acquire_timeout=65,  # Exercise an explicit, tight shared budget below.
         boot_id="b" * 64,  # Business-operation fixtures start with a verified binding.
     )
 
 
 # ------------------------------------------------------------------ acquire
+
+def test_default_budget_covers_capture_and_streamed_large_database_decrypt(tmp_path, monkeypatch):
+    clock = _FakeClock()
+    monkeypatch.setattr(snapshot_runtime.time, "monotonic", clock)
+    budgets = []
+
+    def transport(url, body, timeout):
+        budgets.append((timeout, json.loads(body)["timeout_ms"]))
+        clock.advance(70)  # Measured capture + decryption exceeds the old 65 s.
+        return 200, _envelope(_acquire_result("gen-large"))
+
+    client = QQDirectSnapshotRuntimeClient(
+        base_url="http://127.0.0.1:40654", snapshot_root=tmp_path,
+        transport=transport, boot_id="b" * 64,
+    )
+    assert client.acquire() == "gen-large"
+    assert budgets == [(120, 120000)]
 
 @pytest.mark.parametrize('error,category', [
     (TimeoutError('PRIVATE_TRANSPORT'), 'timeout'),

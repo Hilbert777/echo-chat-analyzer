@@ -57,7 +57,8 @@ const FILE_GUARDS = Object.freeze({ ENOENT: 'file_missing', EACCES: 'access_deni
   EPERM: 'access_denied', EBUSY: 'file_busy', EEXIST: 'output_exists', EIO: 'file_io_failed',
   ENOSPC: 'disk_full', EROFS: 'read_only_filesystem', EMFILE: 'open_file_limit',
   ENFILE: 'open_file_limit', ENOTDIR: 'directory_invalid', ERR_DLOPEN_FAILED: 'native_load_failed',
-  ERR_OSSL_BAD_DECRYPT: 'crypto_rejected', ERR_CRYPTO_INVALID_KEYLEN: 'crypto_key_format_invalid' });
+  ERR_OSSL_BAD_DECRYPT: 'crypto_rejected', ERR_CRYPTO_INVALID_KEYLEN: 'crypto_key_format_invalid',
+  ERR_FS_FILE_TOO_LARGE: 'file_too_large', ERR_BUFFER_TOO_LARGE: 'file_too_large' });
 
 function traceAcquisitionDiagnostic(stage, error = null, generationId = null, witness = {}, failed = true) {
   try {
@@ -81,7 +82,7 @@ function traceAcquisitionDiagnostic(stage, error = null, generationId = null, wi
       'regular_file', 'single_link', 'sidecar_present', 'file_size_matches', 'sqlite_signature_valid',
       'page_size_valid', 'format_versions_valid', 'page_count_valid', 'page_one_in_committed_wal',
       'merged_page_one_matches_selected', 'header_count_nonzero', 'header_counters_equal',
-      'header_pages_match_commit']) {
+      'header_pages_match_commit', 'main_metadata_stable']) {
       if (typeof witness[name] === 'boolean') fields += ` ${name}=${witness[name]}`;
     }
     if (['main', 'wal'].includes(witness.page_one_source)) fields += ` page_one_source=${witness.page_one_source}`;
@@ -409,7 +410,7 @@ export function createEchoSnapshotApi(core, options = {}) {
     }
   }
 
-  async function acquire({ signal, deadline = now() + 65000 } = {}) {
+  async function acquire({ signal, deadline = now() + 120000 } = {}) {
     const cancelled = () => signal?.aborted || now() >= deadline;
     let entered = false;
     traceStage('acquire_queued');

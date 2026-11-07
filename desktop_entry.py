@@ -8,6 +8,11 @@ importing the GUI; ``python -m qq_chat_analyzer.gui`` uses the same bootstrap.
 from __future__ import annotations
 
 import sys
+import multiprocessing
+
+# PyInstaller must dispatch our private SQLite children before desktop startup.
+if __name__ == "__main__":
+    multiprocessing.freeze_support()
 
 from qq_chat_analyzer.desktop import main
 

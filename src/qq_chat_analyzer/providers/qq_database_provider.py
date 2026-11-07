@@ -14,6 +14,7 @@ from typing import Any
 
 from ..qq_db_identity import QQ_DB_SELF_NAMESPACE, canonical_qq_uin
 from ..diagnostics import qq_session_stage
+from .qq_sqlite_reader import needs_qq_layout, read_rows
 
 
 QQ_DB_JSON_FORMAT = "qq-db-json"
@@ -356,10 +357,15 @@ class QQDatabaseProvider:
         connection: sqlite3.Connection | None = None
         stage = "connect"
         try:
-            connection = sqlite3.connect(self._read_only_uri(), uri=True)
-            connection.row_factory = sqlite3.Row
-            stage = "query"
-            rows = connection.execute(query, parameters or []).fetchall()
+            if needs_qq_layout(self._database_path):
+                stage = "query"
+                names, values = read_rows(self._database_path, query, parameters)
+                rows = [dict(zip(names, row)) for row in values]
+            else:
+                connection = sqlite3.connect(self._read_only_uri(), uri=True)
+                connection.row_factory = sqlite3.Row
+                stage = "query"
+                rows = connection.execute(query, parameters or []).fetchall()
             if not self._success_diagnostic_recorded:
                 try:
                     self._log_sqlite_success(
@@ -489,9 +495,13 @@ def _file_size(path: Path) -> int:
 def _quick_check(database_path: Path) -> str:
     connection: sqlite3.Connection | None = None
     try:
-        uri = f"{database_path.resolve().as_uri()}?mode=ro"
-        connection = sqlite3.connect(uri, uri=True)
-        row = connection.execute("PRAGMA quick_check(1)").fetchone()
+        if needs_qq_layout(database_path):
+            _, rows = read_rows(database_path, "PRAGMA quick_check(1)")
+            row = rows[0] if rows else None
+        else:
+            uri = f"{database_path.resolve().as_uri()}?mode=ro"
+            connection = sqlite3.connect(uri, uri=True)
+            row = connection.execute("PRAGMA quick_check(1)").fetchone()
         if row and row[0] == "ok":
             return "ok"
         # SQLite's text may contain private table names or values. Never log it.

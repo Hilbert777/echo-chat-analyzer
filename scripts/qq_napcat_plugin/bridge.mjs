@@ -593,9 +593,9 @@ export async function startBridge(core, snapshot, {port = 40655, host = '127.0.0
       if (!method) return send(400, {ok: false, error: 'invalid_method'});
       const params = Object.hasOwn(body, 'params') ? body.params : [];
       if (!Array.isArray(params) || params.length !== method.count || (method.valid && !method.valid(params[0]))) return send(400, {ok: false, error: 'invalid_params'});
-      const acquireBudget = body.timeout_ms ?? 65000;
+      const acquireBudget = body.timeout_ms ?? 120000;
       const acquiring = body.method === 'EchoSnapshotApi.acquire';
-      if (acquiring && (!Number.isInteger(acquireBudget) || acquireBudget < 1 || acquireBudget > 65000)) {
+      if (acquiring && (!Number.isInteger(acquireBudget) || acquireBudget < 1 || acquireBudget > 120000)) {
         return send(400, {ok: false, error: 'invalid_params'});
       }
       const acquireDeadline = acquiring ? performance.now() + acquireBudget : 0;

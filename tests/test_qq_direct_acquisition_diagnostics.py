@@ -47,7 +47,7 @@ def test_wal_generation_reset_during_main_baseline_fails_closed(fictional_source
   mutableFs.readSync=(fd,buffer,at,length,position)=>{
     const count=originalRead(fd,buffer,at,length,position);
     // The main content baseline is read after B was fixed, before WAL scanning.
-    if(!resetDuringBaseline && mainFds.has(fd) && position===0 && length>1024) {
+    if(!resetDuringBaseline && mainFds.has(fd) && position===1024 && length>=4096) {
       resetDuringBaseline=true;
       const wal=fs.readFileSync(walPath), oldFrames=Buffer.from(wal.subarray(32));
       // A reset publishes a new header generation while old physical frame
@@ -204,6 +204,7 @@ def test_key_version_diagnostics_distinguish_retry_updates_without_reading_keys(
     ("throw Object.assign(new Error('PRIVATE_ERROR'),{code:'PRIVATE_CODE'});", 'decrypt', 'unexpected_error', False),
     ("throw Object.assign(new Error('PRIVATE_ERROR'),{code:'ENOSPC'});", 'decrypt', 'disk_full', False),
     ("throw Object.assign(new Error('PRIVATE_ERROR'),{code:'ERR_DLOPEN_FAILED'});", 'decrypt', 'native_load_failed', False),
+    ("throw Object.assign(new Error('PRIVATE_ERROR'),{code:'ERR_FS_FILE_TOO_LARGE'});", 'decrypt', 'file_too_large', False),
     ("return false;", 'decrypt', 'decrypt_rejected', True),
     ("return true;", 'decrypt', 'decrypt_output_missing', False),
     ("const b=fs.readFileSync(outputPath); b[18]=255; fs.writeFileSync(target,b); return true;",

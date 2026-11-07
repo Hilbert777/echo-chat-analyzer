@@ -11,7 +11,7 @@
   "napcatPatch": {
     "path": "napcat.mjs",
     "upstreamSha256": "6a22c93373c8f73462658d57b00bc88164d7e5858c0fe2f178eb97d66d7cb3ba",
-    "patchedSha256": "0e4b554c4a2aea65c5b7625bee65c097f453e26ee8eaa1e13923f70ad73c6dde",
+    "patchedSha256": "e362b232cf225e92253086e14a24c055adfbb09da4e9b0f8988c75e5ea49137e",
     "replacements": [
       {
         "anchor": "  let a;\n  if (r.onCmd(\"OidbSvcTrpcTcp.0xcde_2\"",
@@ -28,6 +28,10 @@
       {
         "anchor": "new Set([\n  \"napcat-plugin-builtin\",\n  \"napcat-plugin-cleaner\",\n  \"napcat-plugin-ssqq\",\n  \"napcat-plugin-qce\"\n])",
         "replacement": "new Set([\n  \"napcat-plugin-echo\",\n  \"napcat-plugin-builtin\",\n  \"napcat-plugin-cleaner\",\n  \"napcat-plugin-ssqq\",\n  \"napcat-plugin-qce\"\n])"
+      },
+      {
+        "anchor": "function zE(t, e, n) {\n  const r = $e.readFileSync(t), i = WE(r, e);\n  if (!i) return null;\n  if (!n) {\n    const o = t.lastIndexOf(\".\");\n    n = o > 0 ? t.substring(0, o) + \"_decrypted\" + t.substring(o) : t + \"_decrypted\";\n  }\n  return $e.writeFileSync(n, i), n;\n}",
+        "replacement": "function zE(t, e, n) {\n  // Keep the upstream key derivation and per-page decoder. Only file I/O is\n  // batched: readFileSync rejects files over 2 GiB even on 64-bit Node.js.\n  const source = $e.openSync(t, \"r\");\n  let target = null;\n  try {\n    const size = $e.fstatSync(source).size;\n    if (size < T8 + Qs) return null;\n    const readExactly = (buffer, length, position) => {\n      for (let at = 0; at < length;) {\n        const count = $e.readSync(source, buffer, at, length - at, position + at);\n        if (count <= 0) throw Object.assign(new Error(\"decrypt_short_read\"), { code: \"EIO\" });\n        at += count;\n      }\n    };\n    const header = Buffer.alloc(16);\n    readExactly(header, header.length, 0);\n    if (!header.equals(yY)) return null;\n    const salt = Buffer.alloc(CN);\n    readExactly(salt, salt.length, T8);\n    const { encKey } = bY(e, salt);\n    const pages = Math.floor((size - T8) / Qs), batchPages = 256;\n    const input = Buffer.alloc(Math.min(pages, batchPages) * Qs);\n    const output = Buffer.alloc(input.length);\n    if (!n) {\n      const dot = t.lastIndexOf(\".\");\n      n = dot > 0 ? t.substring(0, dot) + \"_decrypted\" + t.substring(dot) : t + \"_decrypted\";\n    }\n    target = $e.openSync(n, \"w\");\n    for (let page = 0; page < pages; page += batchPages) {\n      const count = Math.min(batchPages, pages - page), length = count * Qs;\n      readExactly(input, length, T8 + page * Qs);\n      output.fill(0, 0, length);\n      for (let local = 0; local < count; local++) {\n        const at = local * Qs, first = page + local === 0;\n        const plain = xY(input.subarray(at, at + Qs), encKey, first ? CN : 0);\n        plain.copy(output, at + (first ? 16 : 0));\n        if (first) {\n          vY.copy(output, at);\n          output.writeUInt16BE(Qs, at + 16);\n        }\n      }\n      for (let at = 0; at < length;) {\n        const count = $e.writeSync(target, output, at, length - at, page * Qs + at);\n        if (count <= 0) throw Object.assign(new Error(\"decrypt_short_write\"), { code: \"EIO\" });\n        at += count;\n      }\n    }\n    return n;\n  } finally {\n    try { if (target !== null) $e.closeSync(target); }\n    finally { $e.closeSync(source); }\n  }\n}"
       }
     ]
   },
@@ -79,12 +83,12 @@
     {
       "source": "qq_direct_db_snapshot/snapshot.mjs",
       "target": "plugins/napcat-plugin-echo/snapshot/snapshot.mjs",
-      "sha256": "fd3b3d0db814318eacc96fb0a7f2d5d5374956621f8ac3b31a41dcebbc5b4c65"
+      "sha256": "8fcbaa9db2763212aa807a308cce080b93e7f65c15828f472592ccdf1afc2464"
     },
     {
       "source": "qq_direct_db_snapshot/main_wal.mjs",
       "target": "plugins/napcat-plugin-echo/snapshot/main_wal.mjs",
-      "sha256": "95de6161f6e898db41c2502108a0789588510baae19420ad50549616ce082d38"
+      "sha256": "82bfc68ebcd596abd0ca188baf36006a7d1b00c507d5a8672f216dd78fda230d"
     },
     {
       "source": "qq_direct_db_snapshot/workspace.mjs",
@@ -94,7 +98,7 @@
     {
       "source": "qq_napcat_plugin/bridge.mjs",
       "target": "plugins/napcat-plugin-echo/bridge.mjs",
-      "sha256": "a6aa2528925fbffb31caf3bf82d2a9287147a9cbe23fd3b488c5281cf9092331"
+      "sha256": "5d421f430143a8faf675c42a081e78e447692989a3942562786c3704b54591d2"
     },
     {
       "source": "qq_direct_db_snapshot/source_guard.mjs",

@@ -47,7 +47,7 @@ def test_official_pins_and_correctness_templates():
     whitelist = pins["napcatPatch"]["replacements"][3]
     assert '"napcat-plugin-echo"' in whitelist["replacement"]
     assert '"napcat-plugin-echo"' not in whitelist["anchor"]
-    assert len(pins["napcatPatch"]["replacements"]) == 4
+    assert len(pins["napcatPatch"]["replacements"]) == 5
     for replacement in pins["napcatPatch"]["replacements"]:
         assert "__ECHO_DIRECT_DB_READ_STATE__" not in replacement["anchor"]
         assert "__ECHO_DIRECT_DB_READ_STATE__" not in replacement["replacement"]

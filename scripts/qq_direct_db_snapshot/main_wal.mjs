@@ -277,12 +277,19 @@ function mainPathIdentity(path) {
   try { return identity(fd); }
   finally { closeSync(fd); }
 }
-async function mainFingerprint(fd, check) {
+async function mainFingerprint(fd, check, pageDigests = null) {
   const digest = createHash('sha256');
   const size = fstatSync(fd).size;
-  for (let offset = 0; offset < size; offset += 1024 * 1024) {
+  // Align witnesses with the page batches used by the merge. A before/after
+  // whole-file digest alone cannot detect changed pages restored mid-capture.
+  const prefix = readExactly(fd, Math.min(PREFIX_SIZE, size), 0);
+  digest.update(prefix);
+  if (pageDigests) pageDigests.set(0, createHash('sha256').update(prefix).digest('hex'));
+  for (let offset = PREFIX_SIZE; offset < size; offset += 1024 * 1024) {
     await yieldRead(); check();
-    digest.update(readExactly(fd, Math.min(1024 * 1024, size - offset), offset));
+    const bytes = readExactly(fd, Math.min(1024 * 1024, size - offset), offset);
+    digest.update(bytes);
+    if (pageDigests) pageDigests.set(offset, createHash('sha256').update(bytes).digest('hex'));
   }
   return digest.digest('hex');
 }
@@ -372,11 +379,15 @@ async function capture({ mainPath, walPath, outputPath, passphrase, onPhase = ()
   let published = false;
   try {
     const initialMainState = fileState(mainPath);
+    if (initialMainState === null) fail('main_changed_during_read');
     if (identity(mainFd) !== mainPathIdentity(mainPath)) fail('main_replaced');
     observe('wal_identity');
     const walIdentity = identityPath(walPath);
     observe('main_stability');
-    const initialDigest = await mainFingerprint(mainFd, check);
+    // Only the formal source-lock path may accept metadata-only changes.
+    // Witness every main batch consumed by the merge before permitting that.
+    const mainPageDigests = readWitness ? new Map() : null;
+    const initialDigest = await mainFingerprint(mainFd, check, mainPageDigests);
     onPhase('main_baseline_read');
     observe('wal_prefix');
     const wal = await readCommittedWal(walPath, before.boundary, onPhase, true, check);
@@ -386,6 +397,9 @@ async function capture({ mainPath, walPath, outputPath, passphrase, onPhase = ()
     onPhase('boundary_selected');
     observe('main_identity');
     const prefix = readExactly(mainFd, PREFIX_SIZE, 0);
+    if (mainPageDigests && mainPageDigests.get(0) !== createHash('sha256').update(prefix).digest('hex')) {
+      fail('main_changed_during_read');
+    }
     if (!prefix.subarray(0, 16).equals(CUSTOM_HEADER)) fail('main_format_unsupported');
     const mainBytes = fstatSync(mainFd).size;
     if ((mainBytes - PREFIX_SIZE) % PAGE_SIZE !== 0) fail('main_size_invalid');
@@ -410,9 +424,11 @@ async function capture({ mainPath, walPath, outputPath, passphrase, onPhase = ()
       if ((number - 1) % 256 === 0) { await yieldRead(); check(); }
       if (!wal.pages.has(number) && number <= mainPages &&
           (number < mainBatchStart || number >= mainBatchStart + mainBatch.length / PAGE_SIZE)) {
-        mainBatchStart = number;
-        mainBatch = readExactly(mainFd, Math.min(256, Math.min(mainPages, pageCount) - number + 1) * PAGE_SIZE,
-          PREFIX_SIZE + (number - 1) * PAGE_SIZE);
+        mainBatchStart = 1 + Math.floor((number - 1) / 256) * 256;
+        const batchOffset = PREFIX_SIZE + (mainBatchStart - 1) * PAGE_SIZE;
+        mainBatch = readExactly(mainFd, Math.min(256, mainPages - mainBatchStart + 1) * PAGE_SIZE, batchOffset);
+        if (mainPageDigests && mainPageDigests.get(batchOffset) !==
+            createHash('sha256').update(mainBatch).digest('hex')) fail('main_changed_during_read');
       }
       const encrypted = wal.pages.get(number) ??
         (number <= mainPages
@@ -443,7 +459,15 @@ async function capture({ mainPath, walPath, outputPath, passphrase, onPhase = ()
       } catch { /* Missing diagnostic evidence is not a successful comparison. */ }
     }
     observe('main_stability');
-    if (initialMainState !== fileState(mainPath) || identity(mainFd) !== mainPathIdentity(mainPath) ||
+    const finalMainState = fileState(mainPath);
+    const metadataStable = initialMainState === finalMainState;
+    observe('main_stability', { main_metadata_stable: metadataStable });
+    // Windows can publish file-time changes after the bytes have settled. Keep
+    // identity/size, full before/after content, verified merge batches, source
+    // locks and the complete WAL/SHM checks; never waive a content change.
+    const sameObjectSize = finalMainState !== null &&
+      initialMainState.split(':').slice(0, 3).join(':') === finalMainState.split(':').slice(0, 3).join(':');
+    if ((!metadataStable && (!mainPageDigests || !sameObjectSize)) || identity(mainFd) !== mainPathIdentity(mainPath) ||
         initialDigest !== await mainFingerprint(mainFd, check)) fail('main_changed_during_read');
     // Revalidate every byte and every rolling checksum through the frozen end
     // mark, not just the eight stored bytes on the last frame.

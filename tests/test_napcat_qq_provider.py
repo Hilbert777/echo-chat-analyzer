@@ -367,7 +367,7 @@ def test_expired_acquire_budget_discards_ready_result_even_while_socket_is_open(
     assert TOKEN not in diagnostic and str(tmp_path) not in diagnostic
 
 
-@pytest.mark.parametrize('budget', [0, -1, 65001, 'PRIVATE_BUDGET', True])
+@pytest.mark.parametrize('budget', [0, -1, 120001, 'PRIVATE_BUDGET', True])
 def test_invalid_acquire_budget_cannot_start_capture(runtime, tmp_path, budget):
     marker = tmp_path / 'fictional-invalid-budget.txt'
     base = runtime(marker=marker)
@@ -377,6 +377,17 @@ def test_invalid_acquire_budget_cannot_start_capture(runtime, tmp_path, budget):
     }).encode())
     assert status == 400 and payload == {'ok': False, 'error': 'invalid_params'}
     assert 'acquire' not in marker.read_text().splitlines()
+
+
+def test_bridge_accepts_bounded_large_database_budget(runtime, tmp_path):
+    marker = tmp_path / 'fictional-large-budget.txt'
+    base = runtime(marker=marker)
+    boot = provider(base).status().boot_id
+    status, payload = request(base, raw=json.dumps({
+        'method': 'EchoSnapshotApi.acquire', 'params': [], 'boot_id': boot, 'timeout_ms': 120000,
+    }).encode())
+    assert status == 200 and payload['ok'] is True
+    assert marker.read_text().splitlines().count('acquire') == 1
 
 
 @pytest.mark.slow_integration

@@ -34,17 +34,17 @@ def verify(data: bytes, expected: str) -> None:
 
 
 def apply_napcat_patch(text: str, patch: dict) -> str:
-    """Version-specific contract: key capture and Echo-only allowlist delta.
+    """Version-specific key capture, Echo allowlist and bounded decrypt I/O.
 
     Hashes establish provenance, not correctness. Independently restrict the
     executable changes and their location; fixture tests exercise the changes.
     No upstream entry is executed by this builder.
     """
     edits = patch["replacements"]
-    # G1 key capture (3 edits) + G3 whitelist (1 edit). The G2 read-window
+    # G1 key capture (3 edits), G3 whitelist, and one file-decrypt entry. The G2 read-window
     # telemetry patch was removed; the snapshot runtime now witnesses its own
     # staging input before and after decryption.
-    if len(edits) != 4:
+    if len(edits) != 5 or not edits[4]["anchor"].startswith("function zE(t, e, n) {"):
         raise ValueError("unexpected NapCat patch scope")
     whitelist = edits[3]
     anchor_names = re.findall(r'"([a-z0-9-]+)"', whitelist["anchor"])
