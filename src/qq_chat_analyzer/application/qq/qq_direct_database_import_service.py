@@ -235,6 +235,13 @@ class QQDirectDatabaseImportService:
         return self._state
 
     @property
+    def runtime_stop_safe(self) -> bool:
+        """Prove shutdown has finished using the runtime, under the task gate."""
+        with self._condition:
+            return (self._shutdown_started and self._state is QQDirectDatabaseState.CLOSED
+                    and not self._starting and not self._active_acquisitions)
+
+    @property
     def shutdown_budget_seconds(self) -> float:
         """Return the bounded worst case ``shutdown`` may spend before it returns.
 
@@ -332,11 +339,13 @@ class QQDirectDatabaseImportService:
             active,
         )
         drained = self._drain_acquisitions()
+        quiescent = drained
         if not drained:
             # Stop owned database readers before recover tries to unlink their
             # snapshot. The original drain timeout remains part of the result.
             self._read_cancelled.set()
-            self._drain_acquisitions(deadline=min(shutdown_deadline, time.monotonic() + 2.0))
+            quiescent = self._drain_acquisitions(
+                deadline=min(shutdown_deadline, time.monotonic() + 2.0))
         with self._condition:
             active = self._active_acquisitions
             # Never construct a new binding during shutdown, even if startup
@@ -348,6 +357,13 @@ class QQDirectDatabaseImportService:
             active,
             time.monotonic() - started_at,
         )
+        if not quiescent:
+            # Keep admission sealed and the runtime/credential available to the
+            # live owner. Its finally block still owns generation cleanup.
+            with self._condition:
+                self._shutdown_status = ShutdownStatus.TIMED_OUT
+            _LOGGER.warning("QQ Direct DB recovery deferred reason=tasks_not_drained")
+            return self._shutdown_status
         _LOGGER.info("QQ Direct DB recover started")
         try:
             if client is None:

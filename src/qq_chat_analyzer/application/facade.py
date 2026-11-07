@@ -1772,8 +1772,9 @@ class ChatAnalyzerFacade:
         before stopping NapCat / the QQ runtime. Failure or timeout remains
         explicit in the result; returning alone does not prove plaintext was
         removed. Every step is bounded and exception-safe, so neither a failure
-        nor a hung cleanup in one step can skip the steps after it - in
-        particular QQ runtime termination.  Repeated calls are harmless: the
+        nor a hung cleanup in one step can skip the steps after it. A live
+        owned Direct DB task keeps its runtime until quiescence is proved.
+        Repeated calls are harmless: the
         Direct DB service refuses a second shutdown, and terminated PIDs are
         forgotten by the process registry.
         """
@@ -1846,6 +1847,12 @@ class ChatAnalyzerFacade:
 
     def _shutdown_runtime_and_credential(self) -> ShutdownStatus:
         from .qq.qq_process_registry import QQProcessRegistry
+        from .qq.qq_direct_database_import_service import QQDirectDatabaseImportService
+
+        service = self._qq_service_if_present()
+        if type(service) is QQDirectDatabaseImportService and not service.runtime_stop_safe:
+            _LOGGER.warning("QQ runtime stop deferred reason=direct_db_not_quiescent")
+            return ShutdownStatus.TIMED_OUT
 
         registry = self._require_qq_process_registry()
         if type(registry) is QQProcessRegistry:

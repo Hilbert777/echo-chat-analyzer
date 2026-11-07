@@ -321,6 +321,67 @@ def test_shutdown_cancels_slow_reader_and_rejects_queued_acquisition(tmp_path, m
     assert runtime.recover_calls == 2
 
 
+def test_second_drain_timeout_keeps_live_snapshot_and_runtime(tmp_path, monkeypatch):
+    from unittest.mock import Mock
+    from qq_chat_analyzer.providers.qq_database_provider import QQDatabaseProvider
+    from qq_chat_analyzer.application.shutdown_models import ShutdownStatus
+
+    snapshot = tmp_path / "source.db"
+    _create_snapshot(snapshot)
+    runtime = FakeSnapshotRuntime(tmp_path, snapshot_path=snapshot)
+    service = _service(runtime)
+    service.start()
+    entered, release = threading.Event(), threading.Event()
+    original_check = QQDatabaseProvider.quick_check
+    outcomes = []
+
+    def held_check(path, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return original_check(path, **kwargs)
+
+    def read():
+        try:
+            service.list_sessions()
+        except Exception as error:
+            outcomes.append(type(error).__name__)
+
+    monkeypatch.setattr(QQDatabaseProvider, "quick_check", held_check)
+    owner = threading.Thread(target=read)
+    owner.start()
+    registry = Mock()
+    credential = Mock()
+    facade = ChatAnalyzerFacade(qq_service=service, qq_process_registry=registry,
+                               qq_runtime_session=credential)
+    try:
+        assert entered.wait(3)
+        # The reader is demonstrably live throughout both deterministic drains.
+        drain = Mock(return_value=False)
+        monkeypatch.setattr(service, "_drain_acquisitions", drain)
+        result = facade.shutdown()
+        statuses = {step.name: step.status for step in result.steps}
+        assert drain.call_count == 2 and service._read_cancelled.is_set()
+        assert runtime.recover_calls == 1  # Only startup recovery ran.
+        assert runtime.generation_directory("gen-0001").is_dir()
+        assert runtime.cleaned == [] and owner.is_alive()
+        assert service.state is QQDirectDatabaseState.SHUTTING_DOWN
+        assert not service.runtime_stop_safe
+        assert statuses["direct_db_cleanup"] is ShutdownStatus.TIMED_OUT
+        assert statuses["qq_runtime_termination"] is ShutdownStatus.TIMED_OUT
+        assert not result.can_apply_update
+        registry.terminate_all.assert_not_called()
+        credential.retire.assert_not_called()
+        assert service.shutdown() is ShutdownStatus.TIMED_OUT
+        assert runtime.recover_calls == 1
+    finally:
+        release.set()
+        owner.join(5)
+    assert not owner.is_alive()
+    assert outcomes == ["QQDirectSnapshotInvalid"]
+    assert runtime.cleaned == ["gen-0001"]
+    assert not runtime.generation_directory("gen-0001").exists()
+
+
 def test_connected_napcat_waits_for_delayed_snapshot_api_before_listing(tmp_path: Path) -> None:
     snapshot = tmp_path / "source.db"
     _create_snapshot(snapshot)
