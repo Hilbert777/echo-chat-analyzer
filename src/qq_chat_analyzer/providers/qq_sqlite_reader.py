@@ -9,11 +9,13 @@ child. The desktop's SQLite library and other databases keep the default layout.
 from __future__ import annotations
 
 import ctypes
+from collections.abc import Callable
 import multiprocessing
 import os
 from pathlib import Path
 import sqlite3
 import threading
+import time
 
 
 _PENDING_BYTE = 0x40000000
@@ -95,18 +97,27 @@ def _read_worker(channel, path: str, query: str, parameters: list) -> None:
         channel.close()
 
 
-def read_rows(path: Path, query: str, parameters: list | None = None) -> tuple[list[str], list[tuple]]:
+def read_rows(
+    path: Path, query: str, parameters: list | None = None, *,
+    cancelled: Callable[[], bool] = lambda: False,
+) -> tuple[list[str], list[tuple]]:
     """Run a read-only query in one bounded, private child and always reap it."""
     context = multiprocessing.get_context("spawn")
     receiver, sender = context.Pipe(duplex=False)
     process = context.Process(target=_read_worker, args=(sender, str(path), query, parameters or []), daemon=True)
     started = False
     try:
+        if cancelled():
+            raise sqlite3.DatabaseError("QQ SQLite read cancelled.")
         process.start()
         started = True
         sender.close()
-        if not receiver.poll(_READ_TIMEOUT):
-            raise sqlite3.DatabaseError("QQ SQLite read timed out.")
+        deadline = time.monotonic() + _READ_TIMEOUT
+        while not receiver.poll(0.1):
+            if cancelled():
+                raise sqlite3.DatabaseError("QQ SQLite read cancelled.")
+            if time.monotonic() >= deadline:
+                raise sqlite3.DatabaseError("QQ SQLite read timed out.")
         try:
             status, names, rows = receiver.recv()
         except (EOFError, OSError):

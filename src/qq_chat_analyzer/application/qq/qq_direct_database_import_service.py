@@ -197,6 +197,7 @@ class QQDirectDatabaseImportService:
         self._reconnect_required = False
         self._connection_epoch = object()
         self._starting = False
+        self._read_cancelled = threading.Event()
 
     def _require_reconnect(self) -> None:
         with self._condition:
@@ -218,6 +219,7 @@ class QQDirectDatabaseImportService:
             self._shutdown_started = False
             self._shutdown_status = ShutdownStatus.UNKNOWN
             self._state = QQDirectDatabaseState.CLOSED
+            self._read_cancelled.clear()
 
     @contextmanager
     def reconnect_guard(self) -> Iterator[None]:
@@ -324,11 +326,17 @@ class QQDirectDatabaseImportService:
                 return self._shutdown_status
             self._state = QQDirectDatabaseState.SHUTTING_DOWN
             active = self._active_acquisitions
+            self._condition.notify_all()
         _LOGGER.info(
             "QQ Direct DB shutdown entered state=shutting_down active=%s",
             active,
         )
         drained = self._drain_acquisitions()
+        if not drained:
+            # Stop owned database readers before recover tries to unlink their
+            # snapshot. The original drain timeout remains part of the result.
+            self._read_cancelled.set()
+            self._drain_acquisitions(deadline=min(shutdown_deadline, time.monotonic() + 2.0))
         with self._condition:
             active = self._active_acquisitions
             # Never construct a new binding during shutdown, even if startup
@@ -392,8 +400,9 @@ class QQDirectDatabaseImportService:
                     database_path, self_uin = _validated_generation(
                         client.generation_directory(generation_id),
                         generation_id,
+                        cancelled=self._read_cancelled.is_set,
                     )
-                    provider = QQDatabaseProvider(database_path)
+                    provider = QQDatabaseProvider(database_path, cancelled=self._read_cancelled.is_set)
                     sessions = provider.list_sessions(self_uin=self_uin)
                 except QQSnapshotWorkerGenerationChanged as error:
                     self._require_reconnect()
@@ -444,9 +453,10 @@ class QQDirectDatabaseImportService:
                     database_path, self_uin = _validated_generation(
                         client.generation_directory(generation_id),
                         generation_id,
+                        cancelled=self._read_cancelled.is_set,
                     )
                     snapshot_at = time.perf_counter()
-                    provider = QQDatabaseProvider(database_path)
+                    provider = QQDatabaseProvider(database_path, cancelled=self._read_cancelled.is_set)
                     session = next(
                         (
                             candidate
@@ -677,6 +687,15 @@ class QQDirectDatabaseImportService:
             epoch = self._connection_epoch
         self._ensure_usable(connection_epoch=epoch)
         with self._condition:
+            # The runtime owns a single published generation. Its next acquire
+            # recovers the previous one, so serialize the complete consumer
+            # lifetime, including SQLite reads and cleanup, on this side too.
+            while self._active_acquisitions:
+                if epoch is not self._connection_epoch:
+                    raise QQReconnectRequired()
+                if self._shutdown_started or self._reconnect_required:
+                    raise QQDirectDatabaseShuttingDown()
+                self._condition.wait()
             if epoch is not self._connection_epoch:
                 raise QQReconnectRequired()
             if self._reconnect_required or getattr(self._provider_factory, "reconnect_required", False) is True:
@@ -696,13 +715,14 @@ class QQDirectDatabaseImportService:
             if self._active_acquisitions == 0:
                 self._condition.notify_all()
 
-    def _drain_acquisitions(self) -> bool:
+    def _drain_acquisitions(self, *, deadline: float | None = None) -> bool:
         """Wait, up to a bounded window, for in-flight acquisitions to finish.
 
         Returns ``True`` when every in-flight acquisition finished inside the
         window, and ``False`` when the window ran out; the caller reports which.
         """
-        deadline = time.monotonic() + self._shutdown_drain_seconds
+        if deadline is None:
+            deadline = time.monotonic() + self._shutdown_drain_seconds
         with self._condition:
             _LOGGER.info(
                 "QQ Direct DB drain started active=%s window=%.2fs",
@@ -886,6 +906,8 @@ def _group_sender_names_with_diagnostics(
 def _validated_generation(
     generation_directory: Path,
     generation_id: str,
+    *,
+    cancelled=lambda: False,
 ) -> tuple[Path, str]:
     """Validate one generation's manifest and return its database and self UIN.
 
@@ -938,7 +960,7 @@ def _validated_generation(
     # own quick_check is the independent final integrity gate before the app
     # exposes the generation to session discovery or materialization.
     with qq_session_stage(_LOGGER, "quick_check"):
-        if QQDatabaseProvider.quick_check(database_path) != "ok":
+        if QQDatabaseProvider.quick_check(database_path, cancelled=cancelled) != "ok":
             _LOGGER.info("QQ snapshot stage=quick_check outcome=invalid guard_code=sqlite_integrity_failed")
             raise QQDirectSnapshotInvalid()
     return database_path, self_uin

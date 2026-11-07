@@ -285,7 +285,7 @@ def test_session_stage_diagnostics(tmp_path, monkeypatch, caplog, failure):
     if failure == "manifest":
         runtime.manifest_overrides = {"state": "building"}
     if failure == "quick_check":
-        monkeypatch.setattr(QQDatabaseProvider, "quick_check", lambda path: "failed")
+        monkeypatch.setattr(QQDatabaseProvider, "quick_check", lambda path, **kwargs: "failed")
     if failure in ("group_query", "private_query", "double"):
         original = QQDatabaseProvider._query_rows
         def query(self, *args, **kwargs):

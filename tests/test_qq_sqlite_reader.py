@@ -116,3 +116,21 @@ def test_stock_sqlite_large_file_keeps_standard_layout(tmp_path: Path) -> None:
     with path.open("r+b") as stream:
         stream.truncate(0x40000000 + 4096)
     assert not needs_qq_layout(path)
+
+
+def test_cancel_running_query_reaps_owned_child_and_releases_file(tmp_path):
+    import multiprocessing
+    import time
+
+    path = tmp_path / "fictional-cancel.db"
+    with closing(sqlite3.connect(path)) as connection:
+        connection.execute("CREATE TABLE fictional_table(id INTEGER PRIMARY KEY)")
+    previous = {child.pid for child in multiprocessing.active_children()}
+    started = time.monotonic()
+    with pytest.raises(sqlite3.DatabaseError, match="cancelled"):
+        read_rows(path, "WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x<1000000000) "
+                       "SELECT sum(x) FROM n", cancelled=lambda: time.monotonic()-started > 0.5)
+    assert time.monotonic()-started < 5
+    assert {child.pid for child in multiprocessing.active_children()} == previous
+    path.unlink()  # Windows denies this while the SQLite read handle survives.
+    assert not path.exists()

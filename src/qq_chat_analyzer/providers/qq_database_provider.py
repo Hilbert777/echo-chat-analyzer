@@ -9,6 +9,7 @@ import re
 import sqlite3
 import warnings
 from dataclasses import dataclass
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -68,14 +69,15 @@ class QQSession:
 class QQDatabaseProvider:
     """Read a supported QQ group-message database into a raw payload v0."""
 
-    def __init__(self, database_path: str | Path) -> None:
+    def __init__(self, database_path: str | Path, *, cancelled: Callable[[], bool] = lambda: False) -> None:
         self._database_path = Path(database_path)
+        self._cancelled = cancelled
         self._success_diagnostic_recorded = False
 
     @staticmethod
-    def quick_check(database_path: str | Path) -> str:
+    def quick_check(database_path: str | Path, *, cancelled: Callable[[], bool] = lambda: False) -> str:
         """Run SQLite's real integrity check on a read-only database image."""
-        return _quick_check(Path(database_path))
+        return _quick_check(Path(database_path), cancelled=cancelled)
 
     def list_sessions(self, *, self_uin: str | None = None) -> list[QQSession]:
         """Return all conversations (groups + private) in the database."""
@@ -357,12 +359,15 @@ class QQDatabaseProvider:
         connection: sqlite3.Connection | None = None
         stage = "connect"
         try:
+            if self._cancelled():
+                raise sqlite3.DatabaseError("QQ SQLite read cancelled.")
             if needs_qq_layout(self._database_path):
                 stage = "query"
-                names, values = read_rows(self._database_path, query, parameters)
+                names, values = read_rows(self._database_path, query, parameters, cancelled=self._cancelled)
                 rows = [dict(zip(names, row)) for row in values]
             else:
                 connection = sqlite3.connect(self._read_only_uri(), uri=True)
+                connection.set_progress_handler(lambda: int(self._cancelled()), 1000)
                 connection.row_factory = sqlite3.Row
                 stage = "query"
                 rows = connection.execute(query, parameters or []).fetchall()
@@ -445,7 +450,7 @@ class QQDatabaseProvider:
             metadata["wal_bytes"],
             _bool_text(metadata["shm_present"]),
             metadata["shm_bytes"],
-            _quick_check(self._database_path),
+            "cancelled" if self._cancelled() else _quick_check(self._database_path, cancelled=self._cancelled),
         )
 
 
@@ -492,15 +497,18 @@ def _file_size(path: Path) -> int:
         return 0
 
 
-def _quick_check(database_path: Path) -> str:
+def _quick_check(database_path: Path, *, cancelled: Callable[[], bool] = lambda: False) -> str:
     connection: sqlite3.Connection | None = None
     try:
+        if cancelled():
+            raise sqlite3.DatabaseError("QQ SQLite read cancelled.")
         if needs_qq_layout(database_path):
-            _, rows = read_rows(database_path, "PRAGMA quick_check(1)")
+            _, rows = read_rows(database_path, "PRAGMA quick_check(1)", cancelled=cancelled)
             row = rows[0] if rows else None
         else:
             uri = f"{database_path.resolve().as_uri()}?mode=ro"
             connection = sqlite3.connect(uri, uri=True)
+            connection.set_progress_handler(lambda: int(cancelled()), 1000)
             row = connection.execute("PRAGMA quick_check(1)").fetchone()
         if row and row[0] == "ok":
             return "ok"
